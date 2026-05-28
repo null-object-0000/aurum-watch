@@ -214,3 +214,29 @@ export async function fetchXauCandles(
     sentiment: 0
   }));
 }
+
+/**
+ * 按指定日期拉 M1 K 线（用于历史数据逐天同步）。
+ * OANDA 允许传 from/to 参数，一天最多 1440 根 M1 K 线。
+ */
+export async function fetchOandaCandlesForDay(
+  instrument: "XAU_USD" | "USD_CNH",
+  date: string // "YYYY-MM-DD"
+): Promise<OandaCandle[]> {
+  if (!config.oandaToken) return [];
+
+  const from = encodeURIComponent(`${date}T00:00:00Z`);
+  const to = encodeURIComponent(`${date}T23:59:59Z`);
+  const url = `${oandaBaseUrl}/v3/instruments/${instrument}/candles?granularity=M1&from=${from}&to=${to}&price=M`;
+
+  try {
+    const response = await fetch(url, { headers: headers() });
+    if (response.status === 404 || response.status === 422) return []; // weekend / holiday
+    if (!response.ok) throw new Error(`OANDA ${instrument} candles for day ${date}: ${response.status}`);
+    const json = (await response.json()) as { candles?: OandaCandle[] };
+    return (json.candles ?? []).filter((c) => c.complete);
+  } catch {
+    return [];
+  }
+}
+
