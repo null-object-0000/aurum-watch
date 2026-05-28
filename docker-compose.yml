@@ -14,7 +14,7 @@ services:
       - aurum-data:/app/data
 
   aktools:
-    image: registry.cn-shanghai.aliyuncs.com/akfamily/aktools:latest
+    image: ghcr.io/akfamily/aktools:latest
     ports:
       - "8080:8080"
     restart: unless-stopped
