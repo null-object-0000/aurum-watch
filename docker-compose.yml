@@ -6,7 +6,18 @@ services:
       - "8787:8787"
     env_file:
       - .env
+    environment:
+      - AKTOOLS_BASE_URL=http://aktools:8080
+    depends_on:
+      - aktools
     volumes:
       - aurum-data:/app/data
+
+  aktools:
+    image: registry.cn-shanghai.aliyuncs.com/akfamily/aktools:latest
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
 volumes:
   aurum-data:
