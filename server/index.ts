@@ -4,14 +4,14 @@ import Fastify from "fastify";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { WebSocketServer } from "ws";
+
 import { config } from "./config.js";
 import { buildDashboard, derivedQuotes } from "./analytics.js";
 import { saveEvents, saveQuotes } from "./db.js";
 import { fetchAu9999 } from "./providers/au9999.js";
 import { fetchNewsEvents } from "./providers/news.js";
 import { fetchOandaQuotes } from "./providers/oanda.js";
-import type { CandlePoint, DashboardPayload, NewsEvent } from "./types.js";
+import type { CandlePoint, DashboardPayload, NewsEvent, Quote } from "./types.js";
 
 let latest: DashboardPayload | null = null;
 
@@ -55,12 +55,38 @@ app.setNotFoundHandler((request, reply) => {
   reply.status(404).send({ error: "Frontend build not found. Run bun run dev:web or bun run build." });
 });
 
-const server = await app.listen({ port: config.port, host: "0.0.0.0" });
-const wss = new WebSocketServer({ server: app.server, path: "/ws" });
+const sseClients = new Set<any>();
 
-wss.on("connection", (socket) => {
-  if (latest) socket.send(JSON.stringify({ type: "dashboard", payload: latest }));
+app.get("/api/stream", (request, reply) => {
+  reply.raw.setHeader("Content-Type", "text/event-stream");
+  reply.raw.setHeader("Cache-Control", "no-cache");
+  reply.raw.setHeader("Connection", "keep-alive");
+  reply.raw.setHeader("X-Accel-Buffering", "no");
+  reply.raw.statusCode = 200;
+
+  // Send retry interval instruction to client (3 seconds)
+  reply.raw.write("retry: 3000\n\n");
+
+  if (latest) {
+    const liveCandle = latest.candles[latest.candles.length - 1] ?? null;
+    const updatePayload = {
+      quotes: latest.quotes,
+      liveCandle,
+      sentiment: latest.sentiment,
+      sources: latest.sources,
+      updatedAt: latest.updatedAt
+    };
+    reply.raw.write(`data: ${JSON.stringify({ type: "update", payload: updatePayload })}\n\n`);
+  }
+
+  sseClients.add(reply.raw);
+
+  request.raw.on("close", () => {
+    sseClients.delete(reply.raw);
+  });
 });
+
+const server = await app.listen({ port: config.port, host: "0.0.0.0" });
 
 await refresh();
 setInterval(() => {
@@ -73,9 +99,12 @@ async function refresh() {
   saveQuotes(quotes);
   saveEvents(news.events);
 
+  const mergedCandles = mergeAu9999IntoCandles(oanda.candles, au9999);
+  const updatedCandles = applyEventSentiment(mergedCandles, news.events);
+
   latest = buildDashboard({
     quotes,
-    candles: applyEventSentiment(oanda.candles, news.events),
+    candles: updatedCandles,
     events: news.events,
     sources: [
       { name: "XAU/USD", status: oanda.status, detail: oanda.detail },
@@ -87,11 +116,54 @@ async function refresh() {
     updatedAt: new Date().toISOString()
   });
 
-  const message = JSON.stringify({ type: "dashboard", payload: latest });
-  for (const client of wss.clients) {
-    if (client.readyState === client.OPEN) client.send(message);
+  const liveCandle = updatedCandles[updatedCandles.length - 1] ?? null;
+  const updatePayload = {
+    quotes: latest.quotes,
+    liveCandle,
+    sentiment: latest.sentiment,
+    sources: latest.sources,
+    updatedAt: latest.updatedAt
+  };
+
+  const message = `data: ${JSON.stringify({ type: "update", payload: updatePayload })}\n\n`;
+  for (const client of sseClients) {
+    try {
+      client.write(message);
+    } catch {
+      sseClients.delete(client);
+    }
   }
   return latest;
+}
+
+function mergeAu9999IntoCandles(candles: CandlePoint[], auQuote: Quote): CandlePoint[] {
+  if (!auQuote.history || !auQuote.history.length) return candles;
+
+  const sortedPoints = [...auQuote.history]
+    .filter((p) => p.updatedAt)
+    .sort((a, b) => new Date(a.updatedAt!).getTime() - new Date(b.updatedAt!).getTime());
+
+  if (!sortedPoints.length) return candles;
+
+  let pointIndex = 0;
+  let lastPrice: number | null = null;
+
+  return candles.map((candle) => {
+    const candleTime = new Date(candle.time).getTime();
+
+    while (
+      pointIndex < sortedPoints.length &&
+      new Date(sortedPoints[pointIndex].updatedAt!).getTime() <= candleTime
+    ) {
+      lastPrice = sortedPoints[pointIndex].price;
+      pointIndex++;
+    }
+
+    return {
+      ...candle,
+      au9999: lastPrice
+    };
+  });
 }
 
 function applyEventSentiment(candles: CandlePoint[], events: NewsEvent[]) {

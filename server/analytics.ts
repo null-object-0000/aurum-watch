@@ -21,6 +21,14 @@ export function derivedQuotes(quotes: Quote[]): Quote[] {
     ? auQuote.sparkline.slice(-xauCnySparkline.length).map((point, index) => point - xauCnySparkline[index])
     : [];
 
+  const xauCnyUpdatedAt = xauQuote?.updatedAt && cnhQuote?.updatedAt
+    ? new Date(Math.min(new Date(xauQuote.updatedAt).getTime(), new Date(cnhQuote.updatedAt).getTime())).toISOString()
+    : null;
+
+  const premiumUpdatedAt = auQuote?.updatedAt && xauCnyUpdatedAt
+    ? new Date(Math.min(new Date(auQuote.updatedAt).getTime(), new Date(xauCnyUpdatedAt).getTime())).toISOString()
+    : null;
+
   return [
     ...quotes,
     derived(
@@ -29,8 +37,9 @@ export function derivedQuotes(quotes: Quote[]): Quote[] {
       xauCny,
       previousXauCny,
       "CNY/g",
-      xau !== null && cnh !== null ? "Calculated" : "Requires XAU/USD and USD/CNH",
-      xauCnySparkline
+      xau !== null && cnh !== null ? "计算值" : "Requires XAU/USD and USD/CNH",
+      xauCnySparkline,
+      xauCnyUpdatedAt
     ),
     derived(
       "DOMESTIC_PREMIUM",
@@ -38,8 +47,9 @@ export function derivedQuotes(quotes: Quote[]): Quote[] {
       premium,
       previousPremium,
       "CNY/g",
-      au !== null && xauCny !== null ? "Calculated" : "Requires AU9999 and converted XAU",
-      premiumSparkline
+      au !== null && xauCny !== null ? "计算值" : "Requires AU9999 and converted XAU",
+      premiumSparkline,
+      premiumUpdatedAt
     )
   ];
 }
@@ -77,7 +87,8 @@ function derived(
   previous: number | null,
   unit: string,
   source: string,
-  sparkline: number[]
+  sparkline: number[],
+  updatedAt: string | null
 ): Quote {
   const change = value !== null && previous !== null ? value - previous : null;
   return {
@@ -89,7 +100,7 @@ function derived(
     unit,
     source,
     status: value === null ? "unconfigured" : "ok",
-    updatedAt: value === null ? null : new Date().toISOString(),
+    updatedAt: value === null ? null : updatedAt,
     sparkline
   };
 }

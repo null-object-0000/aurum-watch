@@ -13,6 +13,7 @@ export interface Quote {
   updatedAt: string | null;
   sparkline: number[];
   error?: string;
+  history?: Array<{ price: number; updatedAt: string | null }>;
 }
 
 export interface CandlePoint {

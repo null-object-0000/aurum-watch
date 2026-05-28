@@ -29,6 +29,20 @@ const upsertQuote = db.prepare(`
   ON CONFLICT(symbol) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
 `);
 
+const getQuoteQuery = db.prepare(`
+  SELECT payload FROM quotes WHERE symbol = ?
+`);
+
+export function getQuote(symbol: string): Quote | null {
+  try {
+    const row = getQuoteQuery.get(symbol) as { payload: string } | undefined;
+    if (!row) return null;
+    return JSON.parse(row.payload) as Quote;
+  } catch {
+    return null;
+  }
+}
+
 const upsertEvent = db.prepare(`
   INSERT INTO events(id, payload, published_at)
   VALUES (@id, @payload, @publishedAt)

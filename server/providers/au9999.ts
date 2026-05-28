@@ -1,9 +1,21 @@
 import { config } from "../config.js";
 import type { Quote } from "../types.js";
+import { getQuote } from "../db.js";
+
+let lastFetchTime = 0;
+let cachedQuote: Quote | null = null;
 
 export async function fetchAu9999(): Promise<Quote> {
+  const now = Date.now();
+  if (cachedQuote && now - lastFetchTime < config.aktoolsRefreshIntervalMs) {
+    return cachedQuote;
+  }
+
   if (config.aktoolsBaseUrl) {
-    return fetchFromAktools();
+    const quote = await fetchFromAktools();
+    cachedQuote = quote;
+    lastFetchTime = now;
+    return quote;
   }
 
   return unavailable("AKTOOLS_BASE_URL is not configured", "unconfigured");
@@ -39,10 +51,20 @@ async function fetchFromAktools(): Promise<Quote> {
       source: "AKTools/SGE",
       status: value === null ? "error" : "ok",
       updatedAt: latest?.updatedAt ?? new Date().toISOString(),
-      sparkline: points.map((point) => point.price).slice(-120)
+      sparkline: points.map((point) => point.price).slice(-120),
+      history: points.slice(-120)
     };
   } catch (error) {
-    return unavailable(error instanceof Error ? error.message : "AKTools AU9999 failed", "error");
+    const reason = error instanceof Error ? error.message : "AKTools AU9999 failed";
+    const cached = getQuote("AU9999");
+    if (cached) {
+      return {
+        ...cached,
+        status: "error",
+        error: reason
+      };
+    }
+    return unavailable(reason, "error");
   }
 }
 
@@ -80,6 +102,7 @@ function unavailable(reason: string, status: Quote["status"]): Quote {
     status,
     updatedAt: null,
     sparkline: [],
+    history: [],
     error: reason
   };
 }

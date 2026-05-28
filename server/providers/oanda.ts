@@ -74,8 +74,8 @@ export async function fetchOandaQuotes(): Promise<{ quotes: Quote[]; candles: Ca
     const previousXau = previousCompletedValue(xauCandlesRaw);
     const previousCnh = previousCompletedValue(cnhCandlesRaw);
 
-    const xauQuote = makeQuote("XAU_USD", "XAU/USD", latestXau, previousXau, "USD/oz", "OANDA", xauSeries);
-    const cnhQuote = makeQuote("USD_CNH", "USD/CNH", latestCnh, previousCnh, "rate", "OANDA", cnhSeries);
+    const xauQuote = makeQuote("XAU_USD", "XAU/USD", latestXau, previousXau, "USD/oz", "OANDA", xauSeries.slice(-120));
+    const cnhQuote = makeQuote("USD_CNH", "USD/CNH", latestCnh, previousCnh, "rate", "OANDA", cnhSeries.slice(-120));
 
     const candles = appendLiveCandle(xauCandlesRaw, latestXau, xauPrice?.time).map((c) => ({
       time: c.time,
@@ -145,6 +145,21 @@ function appendLiveValue(candles: OandaCandle[], latest: number | null) {
 
 function appendLiveCandle(candles: OandaCandle[], latest: number | null, time?: string) {
   if (latest === null) return candles;
+  const lastCandle = candles.at(-1);
+  if (lastCandle) {
+    const lastSec = Math.floor(new Date(lastCandle.time).getTime() / 1000);
+    const liveSec = Math.floor(new Date(time ?? Date.now()).getTime() / 1000);
+    if (liveSec <= lastSec) {
+      return [
+        ...candles,
+        {
+          time: new Date((lastSec + 1) * 1000).toISOString(),
+          complete: false,
+          mid: { c: String(latest) }
+        }
+      ];
+    }
+  }
   return [
     ...candles,
     {

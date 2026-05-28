@@ -10,6 +10,7 @@ export const config = {
   oandaEnv: process.env.OANDA_ENV === "live" ? "live" : "practice",
   aktoolsBaseUrl: process.env.AKTOOLS_BASE_URL ?? "",
   aktoolsAu9999Symbol: process.env.AKTOOLS_AU9999_SYMBOL ?? "Au99.99",
+  aktoolsRefreshIntervalMs: Number(process.env.AKTOOLS_REFRESH_INTERVAL_MS ?? 10000),
   newsQuery: process.env.NEWS_QUERY ?? "gold OR XAUUSD OR Fed OR inflation OR war"
 };
 
