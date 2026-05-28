@@ -1,0 +1,12 @@
+.metric-card, .panel {
+  border: 1px solid #252f3b;
+  background: #101720;
+  border-radius: 8px;
+  box-shadow: 0 10px 26px rgba(0,0,0,.18);
+}
+
+.panel { padding: 13px 16px; min-width: 0; }
+.panel header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.panel h2 { margin: 0; font-size: 16px; font-weight: 700; color: #edf2f8; }
+.panel h2 span { color: #7e8998; font-size: 12px; margin-left: 5px; font-weight: 500; }
+.panel header button { border: 0; color: #8db3e2; background: transparent; }

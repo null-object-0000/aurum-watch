@@ -1,0 +1,39 @@
+.gauge { height: 172px; }
+.sentiment-stats { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid #252f3b; border-bottom: 1px solid #252f3b; margin: 8px 0 12px; padding: 10px 0; gap: 8px; }
+.sentiment-stats span { display: grid; gap: 4px; color: #8b96a6; font-size: 12px; text-align: center; }
+.factor-list { display: grid; gap: 8px; }
+.factor-list div { display: grid; grid-template-columns: 80px 1fr 38px; align-items: center; gap: 8px; font-size: 13px; }
+.factor-list i { height: 8px; background: #222b36; border-radius: 99px; overflow: hidden; }
+.factor-list b { display: block; height: 100%; border-radius: inherit; }
+.factor-list .pos { background: #d94b55; }
+.factor-list .neg { background: #2fac74; }
+
+.event-feed { display: grid; gap: 0; }
+.event-feed a { display: grid; grid-template-columns: 12px 50px 90px 1fr auto auto; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid #252f3b; color: inherit; text-decoration: none; }
+.event-feed strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.event-feed small, .event-feed time { color: #8d98a8; }
+.event-feed em { font-style: normal; background: #202b38; color: #b8c6d8; border-radius: 5px; padding: 3px 7px; font-size: 12px; }
+.event-dot { width: 8px; height: 8px; border-radius: 50%; background: #8994a3; }
+.event-dot.bullish { background: #d94b55; }
+.event-dot.bearish { background: #2fac74; }
+
+.signal h3 { font-size: 23px; margin: 12px 0; }
+.signal p { color: #c4ccd7; line-height: 1.7; }
+.signal small { color: #7e8998; }
+.prediction { width: 100%; border-collapse: collapse; font-size: 13px; }
+.prediction th, .prediction td { text-align: left; padding: 7px 6px; border-bottom: 1px solid #252f3b; }
+.prediction th { color: #8b96a6; font-weight: 600; }
+.prob { display: flex; height: 20px; overflow: hidden; border-radius: 4px; background: #222b36; min-width: 160px; }
+.prob span { display: grid; place-items: center; font-size: 11px; color: white; min-width: 24px; }
+.prob span:nth-child(1) { background: #c94952; }
+.prob span:nth-child(2) { background: #6d7683; }
+.prob span:nth-child(3) { background: #2fa86f; }
+.explain { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+.explain li { display: grid; grid-template-columns: 18px 1fr; gap: 7px; color: #c4ccd7; line-height: 1.55; font-size: 13px; }
+.explain svg { color: #31b978; margin-top: 2px; }
+.sources { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 22px; }
+.sources div { display: grid; grid-template-columns: 1fr 10px 48px; align-items: center; gap: 8px; color: #c4ccd7; font-size: 13px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #8792a0; }
+.dot.ok { background: #31b978; box-shadow: 0 0 0 3px rgba(49,185,120,.10); }
+.dot.error, .dot.unconfigured { background: #d94b55; box-shadow: 0 0 0 3px rgba(217,75,85,.10); }
+.dot.stale { background: #c9a227; }

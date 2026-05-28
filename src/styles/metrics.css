@@ -1,0 +1,56 @@
+.metric-grid { display: grid; grid-template-columns: repeat(5, minmax(180px, 1fr)); gap: 12px; }
+.metric-card {
+  min-height: 104px;
+  padding: 10px 12px;
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40%;
+  gap: 8px;
+  align-items: stretch;
+}
+.metric-copy { min-width: 0; display: grid; grid-template-rows: auto auto auto 1fr; align-content: start; }
+.card-title { display: flex; justify-content: space-between; gap: 10px; padding-right: 18px; }
+.card-title h3 { margin: 0; font-size: 14px; line-height: 18px; font-weight: 650; color: #edf2f8; }
+.card-title span { color: #8994a3; font-size: 11px; line-height: 15px; display: block; margin-top: 2px; }
+.metric-info { position: absolute; top: 12px; right: 12px; color: #596678; }
+.metric-copy > strong { display: block; font-size: 24px; line-height: 28px; margin-top: 6px; letter-spacing: 0; }
+.metric-copy p { margin: 0; font-size: 12px; line-height: 16px; font-weight: 700; }
+.metric-copy small { color: #8994a3; position: relative; z-index: 1; align-self: end; font-size: 11px; line-height: 14px; overflow-wrap: anywhere; }
+.status { border: 1px solid #303a48; border-radius: 999px; padding: 2px 7px; height: 21px; }
+.status.ok { color: #31b978; }
+.status.error, .status.unconfigured { color: #ef6b72; }
+.spark { width: 100%; height: 42px; opacity: .95; margin-top: 12px; }
+.metric-trend {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  min-width: 0;
+  height: 100%;
+}
+.trend-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 14px;
+  color: #8994a3;
+  text-align: right;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: auto;
+  padding-bottom: 2px;
+}
+.trend-status.stale {
+  color: #e2b13c;
+}
+.trend-status.error {
+  color: #ef6b72;
+}
+.error-icon {
+  flex-shrink: 0;
+  color: #ef6b72;
+}
