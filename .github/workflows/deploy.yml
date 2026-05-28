@@ -1,0 +1,39 @@
+name: Deploy
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aurum-watch-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+      ACR_NAMESPACE: ${{ secrets.ACR_NAMESPACE }}
+      ACR_REPOSITORY: aurum-watch
+      REMOTE_DIR: ${{ secrets.REMOTE_DIR || '/opt/aurum-watch' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Log in to ACR
+        run: echo "${{ secrets.ACR_PASSWORD }}" | docker login "$ACR_REGISTRY" -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+
+      - name: Build image
+        run: |
+          IMAGE="$ACR_REGISTRY/$ACR_NAMESPACE/$ACR_REPOSITORY"
+          docker build -f Dockerfile -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
+
+      - name: Push image
+        run: |
+          IMAGE="$ACR_REGISTRY/$ACR_NAMESPACE/$ACR_REPOSITORY"
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:latest"

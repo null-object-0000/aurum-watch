@@ -1,0 +1,12 @@
+services:
+  aurum-watch:
+    image: ${APP_IMAGE:-aurum-watch:local}
+    build: .
+    ports:
+      - "8787:8787"
+    env_file:
+      - .env
+    volumes:
+      - aurum-data:/app/data
+volumes:
+  aurum-data:
