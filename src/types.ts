@@ -1,3 +1,4 @@
+export type TimeRange = "1H" | "4H" | "1D" | "7D" | "30D";
 export type Health = "ok" | "stale" | "error" | "unconfigured";
 export type Direction = "bullish" | "bearish" | "neutral";
 

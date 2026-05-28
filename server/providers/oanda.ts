@@ -58,8 +58,8 @@ export async function fetchOandaQuotes(): Promise<{ quotes: Quote[]; candles: Ca
     const priceUrl = `${oandaBaseUrl}/v3/accounts/${accountId}/pricing?instruments=${instruments}`;
     const [priceRes, xauCandlesRaw, cnhCandlesRaw] = await Promise.all([
       fetch(priceUrl, { headers: headers() }),
-      fetchCandles("XAU_USD"),
-      fetchCandles("USD_CNH")
+      fetchOandaCandles("XAU_USD", "M15", 2880),
+      fetchOandaCandles("USD_CNH", "M15", 2880)
     ]);
 
     if (!priceRes.ok) throw new Error(`OANDA pricing ${priceRes.status}`);
@@ -113,17 +113,22 @@ async function getAccountId() {
   return accountId;
 }
 
-async function fetchCandles(instrument: "XAU_USD" | "USD_CNH") {
-  const cached = candleCache.get(instrument);
+export async function fetchOandaCandles(
+  instrument: "XAU_USD" | "USD_CNH",
+  granularity: string = "M15",
+  count: number = 2880
+): Promise<OandaCandle[]> {
+  const cacheKey = `${instrument}:${granularity}:${count}`;
+  const cached = candleCache.get(cacheKey);
   if (cached && Date.now() - cached.updatedAt < CANDLE_CACHE_TTL_MS) return cached.candles;
 
-  const candleUrl = `${oandaBaseUrl}/v3/instruments/${instrument}/candles?granularity=M15&count=2880&price=M`;
+  const candleUrl = `${oandaBaseUrl}/v3/instruments/${instrument}/candles?granularity=${granularity}&count=${count}&price=M`;
   const response = await fetch(candleUrl, { headers: headers() });
   if (!response.ok) throw new Error(`OANDA ${instrument} candles ${response.status}`);
 
   const json = (await response.json()) as { candles: OandaCandle[] };
   const candles = json.candles.filter((c) => c.complete);
-  candleCache.set(instrument, { updatedAt: Date.now(), candles });
+  candleCache.set(cacheKey, { updatedAt: Date.now(), candles });
   return candles;
 }
 
@@ -192,4 +197,20 @@ function makeQuote(
     updatedAt: new Date().toISOString(),
     sparkline
   };
+}
+
+export async function fetchXauCandles(
+  granularity: string,
+  count: number,
+  latestXau: number | null,
+  latestTime?: string
+): Promise<CandlePoint[]> {
+  const candlesRaw = await fetchOandaCandles("XAU_USD", granularity, count);
+  const candlesWithLive = appendLiveCandle(candlesRaw, latestXau, latestTime);
+  return candlesWithLive.map((c) => ({
+    time: c.time,
+    xauUsd: Number(c.mid.c),
+    au9999: null,
+    sentiment: 0
+  }));
 }

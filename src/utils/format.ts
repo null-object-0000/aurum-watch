@@ -12,12 +12,16 @@ export function formatQuoteValue(quote?: Quote) {
   return quote.value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
-export function formatSigned(value?: number | null) {
-  return value === null || value === undefined ? "--" : `${value > 0 ? "+" : ""}${value.toFixed(2)}`;
+export function formatSigned(value?: number | null, symbol?: string) {
+  if (value === null || value === undefined) return "--";
+  const digits = symbol === "USD_CNH" ? 4 : 2;
+  return `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
 }
 
-export function formatPct(value?: number | null) {
-  return value === null || value === undefined ? "--" : `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+export function formatPct(value?: number | null, symbol?: string) {
+  if (value === null || value === undefined) return "--";
+  const digits = symbol === "USD_CNH" ? 4 : 2;
+  return `${value > 0 ? "+" : ""}${value.toFixed(digits)}%`;
 }
 
 export function formatClock(value: Date) {

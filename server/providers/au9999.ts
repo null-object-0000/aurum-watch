@@ -77,12 +77,21 @@ function parseAktoolsRow(row: unknown): AktoolsPoint | null {
   if (!row || typeof row !== "object") return null;
 
   const record = row as Record<string, unknown>;
-  const price = numberFrom(record["现价"] ?? record.price ?? record.value ?? record.last);
+  
+  // If a commodity/symbol is specified in the record, filter it to match only Au99.99
+  const recordSymbol = record["商品"] ?? record.symbol ?? record.name ?? record.instrument ?? record["品种"];
+  if (recordSymbol && typeof recordSymbol === "string" && !recordSymbol.includes(config.aktoolsAu9999Symbol)) {
+    return null;
+  }
+
+  const price = numberFrom(record["现价"] ?? record["最新价"] ?? record.price ?? record.value ?? record.last);
   if (price === null) return null;
 
+  // SGE date columns can be "更新时间", "时间", "time", "updatedAt" etc.
+  const rawDate = record["更新时间"] ?? record["时间"] ?? record.updatedAt ?? record.time;
   return {
     price,
-    updatedAt: dateFrom(record["更新时间"] ?? record.updatedAt ?? record.time)
+    updatedAt: dateFrom(rawDate)
   };
 }
 
@@ -113,16 +122,40 @@ function numberFrom(value: unknown): number | null {
 }
 
 function dateFrom(value: unknown): string | null {
+  if (value instanceof Date) return value.toISOString();
   if (typeof value !== "string" || !value.trim()) return null;
 
-  const direct = new Date(value);
-  if (Number.isFinite(direct.getTime())) return direct.toISOString();
-
-  const normalized = value
-    .replace("年", "-")
-    .replace("月", "-")
-    .replace("日", "")
+  // Clean Chinese characters
+  let str = value
+    .replace(/年|月/g, "-")
+    .replace(/日/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
-  const parsed = new Date(normalized);
-  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
+
+  // If it's just a time like "15:45:00" or "15:45"
+  if (/^\d{2}:\d{2}(:\d{2})?$/.test(str)) {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    str = `${yyyy}-${mm}-${dd} ${str}`;
+  }
+  // If it has month-day-time but no year, e.g. "05-28 15:45:00" or "5-28 15:45"
+  else if (/^\d{1,2}-\d{1,2}\s+\d{2}:\d{2}(:\d{2})?$/.test(str)) {
+    const yyyy = new Date().getFullYear();
+    str = `${yyyy}-${str}`;
+  }
+  // If it has month-day but no year and no time, e.g. "05-28"
+  else if (/^\d{1,2}-\d{1,2}$/.test(str)) {
+    const yyyy = new Date().getFullYear();
+    str = `${yyyy}-${str} 00:00:00`;
+  }
+
+  // Parse as Beijing Time (CST / UTC+8) if no timezone is specified
+  if (!str.endsWith("Z") && !/[+-]\d{2}(:?\d{2})?$/.test(str)) {
+    str = str.replace(" ", "T") + "+08:00";
+  }
+
+  const date = new Date(str);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }

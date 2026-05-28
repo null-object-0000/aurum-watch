@@ -1,32 +1,24 @@
 import React from "react";
 import { createChart, createSeriesMarkers, ColorType, HistogramSeries, LineSeries } from "lightweight-charts";
-import type { CandlePoint } from "../types";
+import type { CandlePoint, TimeRange } from "../types";
 import { chartTime } from "../utils/format";
 
 interface PriceChartProps {
   candles: CandlePoint[];
   fxRate?: number | null;
+  range: TimeRange;
+  onRangeChange: (range: TimeRange) => void;
 }
 
-type TimeRange = "1H" | "4H" | "1D" | "7D" | "30D";
 type PriceUnit = "USD" | "CNY";
-
-const TIME_RANGE_MS: Record<TimeRange, number> = {
-  "1H": 60 * 60 * 1000,
-  "4H": 4 * 60 * 60 * 1000,
-  "1D": 24 * 60 * 60 * 1000,
-  "7D": 7 * 24 * 60 * 60 * 1000,
-  "30D": 30 * 24 * 60 * 60 * 1000
-};
 
 const TROY_OUNCE_GRAMS = 31.1034768;
 
-export function PriceChart({ candles, fxRate }: PriceChartProps) {
-  const [range, setRange] = React.useState<TimeRange>("1D");
+export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChartProps) {
   const [unit, setUnit] = React.useState<PriceUnit>("USD");
   const priceRef = React.useRef<HTMLDivElement>(null);
   const sentimentRef = React.useRef<HTMLDivElement>(null);
-  const visibleCandles = React.useMemo(() => filterCandles(candles, range), [candles, range]);
+  const visibleCandles = candles;
   const xauLabel = unit === "USD" ? "XAU/USD" : "XAU（元/克）";
   const showAuLine = unit === "CNY";
 
@@ -48,7 +40,7 @@ export function PriceChart({ candles, fxRate }: PriceChartProps) {
       layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#8b96a6", attributionLogo: false },
       grid: { vertLines: { color: "#202a35" }, horzLines: { color: "#202a35" } },
       rightPriceScale: { borderColor: "#303a48" },
-      timeScale: { borderColor: "#303a48", visible: true }
+      timeScale: { borderColor: "#303a48", visible: true, timeVisible: true, secondsVisible: false }
     });
     const xauLine = priceChart.addSeries(LineSeries, { color: "#d3a72d", lineWidth: 2 });
 
@@ -58,7 +50,7 @@ export function PriceChart({ candles, fxRate }: PriceChartProps) {
       grid: { vertLines: { color: "#202a35" }, horzLines: { color: "#202a35" } },
       rightPriceScale: { visible: false },
       leftPriceScale: { visible: true, borderColor: "#303a48" },
-      timeScale: { borderColor: "#303a48", visible: true }
+      timeScale: { borderColor: "#303a48", visible: true, timeVisible: true, secondsVisible: false }
     });
     const bars = sentimentChart.addSeries(HistogramSeries, { priceScaleId: "left", priceFormat: { type: "volume" } });
 
@@ -134,8 +126,8 @@ export function PriceChart({ candles, fxRate }: PriceChartProps) {
           <span><i className="legend-event" />事件标记</span>
         </div>
         <div className="chart-controls">
-          {(Object.keys(TIME_RANGE_MS) as TimeRange[]).map((item) => (
-            <button className={item === range ? "active" : ""} key={item} onClick={() => setRange(item)}>{item}</button>
+          {(["1H", "4H", "1D", "7D", "30D"] as TimeRange[]).map((item) => (
+            <button className={item === range ? "active" : ""} key={item} onClick={() => onRangeChange(item)}>{item}</button>
           ))}
           <span />
           {(["USD", "CNY"] as PriceUnit[]).map((item) => (
@@ -155,15 +147,7 @@ export function PriceChart({ candles, fxRate }: PriceChartProps) {
   );
 }
 
-function filterCandles(candles: CandlePoint[], range: TimeRange) {
-  if (!candles.length) return [];
-
-  const end = new Date(candles.at(-1)!.time).getTime();
-  const start = end - TIME_RANGE_MS[range];
-  const filtered = candles.filter((candle) => new Date(candle.time).getTime() >= start);
-
-  return filtered.length >= 2 ? filtered : candles.slice(-2);
-}
+// Candles are pre-filtered and set to correct granularity by the backend
 
 function chartValue(candle: CandlePoint, unit: PriceUnit, fxRate?: number | null) {
   if (candle.xauUsd === null) return null;

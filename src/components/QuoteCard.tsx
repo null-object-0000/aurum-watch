@@ -63,11 +63,13 @@ export function QuoteCard({ quote }: QuoteCardProps) {
         </div>
         <strong className={tone}>{formatQuoteValue(quote)}</strong>
         <p className={tone}>
-          {formatSigned(quote?.change)} <span>{formatPct(quote?.changePct)}</span>
+          {formatSigned(quote?.change, quote?.symbol)} <span>{formatPct(quote?.changePct, quote?.symbol)}</span>
         </p>
         <small>{meta.sourceLabel ?? quote?.source}</small>
       </div>
-      <Info className="metric-info" size={14} />
+      <div className="metric-info" title={meta.description}>
+        <Info size={14} />
+      </div>
       <div className="metric-trend">
         <MiniSpark values={quote?.sparkline ?? []} down={Boolean(quote?.change && quote.change < 0)} />
         <div
@@ -88,7 +90,7 @@ function MiniSpark({ values, down }: { values: number[]; down: boolean }) {
   const max = Math.max(...values);
   const points = values.map((value, index) => {
     const x = (index / (values.length - 1)) * 100;
-    const y = 45 - ((value - min) / Math.max(1, max - min)) * 34;
+    const y = 45 - ((value - min) / (max - min || 1)) * 34;
     return `${x},${y}`;
   });
 

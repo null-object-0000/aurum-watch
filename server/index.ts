@@ -7,10 +7,10 @@ import { fileURLToPath } from "node:url";
 
 import { config } from "./config.js";
 import { buildDashboard, derivedQuotes } from "./analytics.js";
-import { saveEvents, saveQuotes } from "./db.js";
+import { saveEvents, saveQuotes, getQuote } from "./db.js";
 import { fetchAu9999 } from "./providers/au9999.js";
 import { fetchNewsEvents } from "./providers/news.js";
-import { fetchOandaQuotes } from "./providers/oanda.js";
+import { fetchOandaQuotes, fetchXauCandles } from "./providers/oanda.js";
 import type { CandlePoint, DashboardPayload, NewsEvent, Quote } from "./types.js";
 
 let latest: DashboardPayload | null = null;
@@ -43,6 +43,55 @@ app.get("/api/settings", async () => ({
   }
 }));
 
+const RANGE_CONFIG = {
+  "1H": { granularity: "M1", count: 60 },
+  "4H": { granularity: "M5", count: 48 },
+  "1D": { granularity: "M15", count: 96 },
+  "7D": { granularity: "H1", count: 168 },
+  "30D": { granularity: "H4", count: 180 }
+} as const;
+
+app.get("/api/candles", async (request, reply) => {
+  const query = request.query as { range?: string };
+  const range = query.range || "1D";
+
+  const validRanges = ["1H", "4H", "1D", "7D", "30D"];
+  if (!validRanges.includes(range)) {
+    reply.status(400).send({ error: "Invalid range parameter" });
+    return;
+  }
+
+  try {
+    const candles = await getCandlesForRange(range);
+    return candles;
+  } catch (error) {
+    app.log.error(error);
+    reply.status(500).send({ error: error instanceof Error ? error.message : "Failed to fetch candles" });
+  }
+});
+
+async function getCandlesForRange(range: string): Promise<CandlePoint[]> {
+  const cfg = RANGE_CONFIG[range as keyof typeof RANGE_CONFIG];
+  
+  let latestXau: number | null = null;
+  let latestTime: string | undefined;
+  if (latest) {
+    const xauQuote = latest.quotes.find((q) => q.symbol === "XAU_USD");
+    latestXau = xauQuote?.value ?? null;
+    latestTime = xauQuote?.updatedAt ?? undefined;
+  }
+  
+  const candles = await fetchXauCandles(cfg.granularity, cfg.count, latestXau, latestTime);
+  
+  const auQuote = latest?.quotes.find((q) => q.symbol === "AU9999") ?? getQuote("AU9999");
+  const merged = auQuote ? mergeAu9999IntoCandles(candles, auQuote) : candles;
+  
+  const newsEvents = latest?.events ?? [];
+  const updated = applyEventSentiment(merged, newsEvents);
+  
+  return updated;
+}
+
 app.setNotFoundHandler((request, reply) => {
   if (request.raw.url?.startsWith("/api")) {
     reply.status(404).send({ error: "Not found" });
@@ -66,18 +115,6 @@ app.get("/api/stream", (request, reply) => {
 
   // Send retry interval instruction to client (3 seconds)
   reply.raw.write("retry: 3000\n\n");
-
-  if (latest) {
-    const liveCandle = latest.candles[latest.candles.length - 1] ?? null;
-    const updatePayload = {
-      quotes: latest.quotes,
-      liveCandle,
-      sentiment: latest.sentiment,
-      sources: latest.sources,
-      updatedAt: latest.updatedAt
-    };
-    reply.raw.write(`data: ${JSON.stringify({ type: "update", payload: updatePayload })}\n\n`);
-  }
 
   sseClients.add(reply.raw);
 
