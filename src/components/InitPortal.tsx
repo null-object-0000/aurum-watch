@@ -31,7 +31,39 @@ export function InitPortal({ status, onDone, onStatusRefresh }: InitPortalProps)
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
 
+  React.useEffect(() => {
+    let cancelled = false;
+
+    async function loadExistingSyncJob() {
+      try {
+        const res = await fetch("/api/settings/data/sync-status");
+        if (!res.ok) return;
+
+        const job: SyncJob = await res.json();
+        if (cancelled || job.status === "idle") return;
+
+        setSyncJob(job);
+        if (job.status === "running") {
+          setSyncing(true);
+          startPolling();
+        } else if (job.status === "error") {
+          setError(job.error ?? "同步失败");
+        } else if (job.status === "done") {
+          onStatusRefresh();
+          setTimeout(onDone, 1500);
+        }
+      } catch {
+        // The normal init checks still render if sync status is temporarily unavailable.
+      }
+    }
+
+    loadExistingSyncJob();
+
+    return () => { cancelled = true; };
+  }, [onDone, onStatusRefresh]);
+
   function startPolling() {
+    if (pollRef.current) return;
     pollRef.current = setInterval(async () => {
       const res = await fetch("/api/settings/data/sync-status");
       const job: SyncJob = await res.json();

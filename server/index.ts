@@ -69,6 +69,12 @@ let currentSyncJob: SyncJob | null = null;
 const app = Fastify({ logger: true });
 await app.register(cors, { origin: true });
 
+app.addHook("onSend", async (request, reply) => {
+  if (request.raw.url?.startsWith("/api/")) {
+    reply.header("Cache-Control", "no-store");
+  }
+});
+
 const distDir = join(dirname(fileURLToPath(import.meta.url)), "..", "dist");
 if (existsSync(distDir)) {
   await app.register(fastifyStatic, { root: distDir, wildcard: false });

@@ -156,19 +156,19 @@ export function App() {
     setRoute(to);
   }
 
-  function handleInitDone() {
+  const handleInitDone = React.useCallback(() => {
     setInitStatus((prev) => prev ? { ...prev, initialized: true } : null);
     setRoute("dashboard");
     navigateTo("dashboard");
     fetch("/api/dashboard").then((r) => r.json()).then(setData).catch(console.error);
-  }
+  }, []);
 
-  function refreshInitStatus() {
+  const refreshInitStatus = React.useCallback(() => {
     fetch("/api/init-status")
       .then((r) => r.json())
       .then((status: InitStatus) => setInitStatus(status))
       .catch(console.error);
-  }
+  }, []);
 
   // ── Render ────────────────────────────────────────────────────────────
   if (route === "init" && initStatus) {

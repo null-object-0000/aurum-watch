@@ -21,6 +21,7 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: "/offline.html",
+        navigateFallbackDenylist: [/^\/api\//, /^\/ws/],
         globPatterns: ["**/*.{js,css,html,svg,png}"]
       }
     })
