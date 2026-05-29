@@ -83,3 +83,30 @@
 .explanation-panel { grid-column: span 7; }
 .status-panel { grid-column: span 5; }
 
+/* ─── Fixed overlay sidebar ───────────────────────────────────────────── */
+
+/* Sidebar floats fixed on the right — never affects main grid layout */
+.dashboard-sidebar {
+  position: fixed;
+  top: 66px;            /* below the sticky topbar */
+  right: 0;
+  bottom: 0;
+  width: 380px;
+  z-index: 50;
+  background: var(--card);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.12);
+  animation: sidebarSlideIn 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes sidebarSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}

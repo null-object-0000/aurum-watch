@@ -48,4 +48,13 @@
   .event-feed a { grid-template-columns: 12px 44px 1fr auto; }
   .event-feed small { display: none; }
   .sources { grid-template-columns: 1fr; }
+  /* On small screens, sidebar fills the viewport width */
+  .dashboard-sidebar {
+    width: 100%;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+  }
 }
+

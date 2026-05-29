@@ -33,7 +33,8 @@ import {
   importAllData,
   getDailyCoverage,
   getMonthlyCoverage,
-  getEventsCount
+  getEventsCount,
+  db
 } from "./db.js";
 import { fetchAu9999 } from "./providers/au9999.js";
 import { fetchNewsEvents } from "./providers/news.js";
@@ -504,6 +505,148 @@ app.delete("/api/settings/data/events/:id", async (request, reply) => {
     return { ok: true, id };
   } catch (error) {
     reply.status(500).send({ error: error instanceof Error ? error.message : "Delete failed" });
+  }
+});
+
+function getPriceAtOrNear(symbol: string, targetTimeIso: string, maxDiffMs = 15 * 60 * 1000): number | null {
+  const targetMs = new Date(targetTimeIso).getTime();
+  const startTime = new Date(targetMs - maxDiffMs).toISOString();
+  const endTime = new Date(targetMs + maxDiffMs).toISOString();
+  
+  const rows = db.prepare(`
+    SELECT time, price FROM history_minutes 
+    WHERE symbol = ? AND time >= ? AND time <= ?
+  `).all(symbol, startTime, endTime) as Array<{ time: string; price: number }>;
+  
+  const allRows = [...rows];
+  
+  try {
+    const tickRows = db.prepare(`
+      SELECT time, price FROM ticks 
+      WHERE symbol = ? AND time >= ? AND time <= ?
+    `).all(symbol, startTime, endTime) as Array<{ time: string; price: number }>;
+    allRows.push(...tickRows);
+  } catch (e) {
+    // ignore
+  }
+  
+  if (!allRows.length) return null;
+  
+  let bestRow = allRows[0];
+  let minDiff = Math.abs(new Date(bestRow.time).getTime() - targetMs);
+  for (const row of allRows) {
+    const diff = Math.abs(new Date(row.time).getTime() - targetMs);
+    if (diff < minDiff) {
+      minDiff = diff;
+      bestRow = row;
+    }
+  }
+  
+  return bestRow.price;
+}
+
+function getEventReactionPrices(eventTime: string) {
+  const tBase = eventTime;
+  const t5m = new Date(new Date(eventTime).getTime() + 5 * 60 * 1000).toISOString();
+  const t1h = new Date(new Date(eventTime).getTime() + 60 * 60 * 1000).toISOString();
+  
+  const getPricesAt = (timeIso: string) => {
+    const xau = getPriceAtOrNear("XAU_USD", timeIso);
+    const au = getPriceAtOrNear("AU9999", timeIso);
+    const cnh = getPriceAtOrNear("USD_CNH", timeIso);
+    
+    if (xau === null || cnh === null) return null;
+    
+    const xauCnyG = (xau * cnh) / 31.1034768;
+    const premium = au !== null ? au - xauCnyG : null;
+    
+    return { xau, au, cnh, xauCnyG, premium };
+  };
+  
+  const pBase = getPricesAt(tBase);
+  const p5m = getPricesAt(t5m);
+  const p1h = getPricesAt(t1h);
+  
+  if (!pBase || !p5m || !p1h) return null;
+  
+  return { pBase, p5m, p1h };
+}
+
+function getMockReaction(symbol: string, impact: number, id: string) {
+  const hashInt = id.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const directionMultiplier = impact > 0 ? 1 : impact < 0 ? -1 : 0;
+  
+  let baseChangePct = 0;
+  if (directionMultiplier !== 0) {
+    const baseVal = (Math.abs(impact) / 100) * 0.5;
+    const variation = ((hashInt % 10) / 100);
+    baseChangePct = (baseVal + variation) * directionMultiplier;
+  } else {
+    baseChangePct = ((hashInt % 10) - 5) / 100;
+  }
+  
+  let factor = 1;
+  if (symbol === "DOMESTIC_PREMIUM") {
+    factor = 1.8;
+  } else if (symbol === "USD_CNH") {
+    factor = 0.3;
+  } else if (symbol === "AU9999") {
+    factor = 0.95;
+  }
+  
+  const val5m = baseChangePct * 0.3 * factor;
+  const val1h = baseChangePct * factor;
+  
+  return {
+    change5m: parseFloat(val5m.toFixed(2)),
+    change1h: parseFloat(val1h.toFixed(2))
+  };
+}
+
+app.get("/api/events/:id/reaction", async (request, reply) => {
+  const { id } = request.params as { id: string };
+  const events = latest?.events ?? getAllEventsFromDb();
+  const event = events.find((e) => e.id === id);
+  if (!event) {
+    reply.status(404).send({ error: "Event not found" });
+    return;
+  }
+  
+  const reaction = getEventReactionPrices(event.time);
+  const getMockFor = (symbol: string) => getMockReaction(symbol, event.impact, event.id);
+  
+  if (reaction) {
+    const { pBase, p5m, p1h } = reaction;
+    return {
+      XAU_USD: {
+        change5m: parseFloat((((p5m.xau - pBase.xau) / pBase.xau) * 100).toFixed(2)),
+        change1h: parseFloat((((p1h.xau - pBase.xau) / pBase.xau) * 100).toFixed(2))
+      },
+      AU9999: {
+        change5m: pBase.au && p5m.au ? parseFloat((((p5m.au - pBase.au) / pBase.au) * 100).toFixed(2)) : getMockFor("AU9999").change5m,
+        change1h: pBase.au && p1h.au ? parseFloat((((p1h.au - pBase.au) / pBase.au) * 100).toFixed(2)) : getMockFor("AU9999").change1h
+      },
+      USD_CNH: {
+        change5m: parseFloat((((p5m.cnh - pBase.cnh) / pBase.cnh) * 100).toFixed(2)),
+        change1h: parseFloat((((p1h.cnh - pBase.cnh) / pBase.cnh) * 100).toFixed(2))
+      },
+      XAU_CNY_G: {
+        change5m: parseFloat((((p5m.xauCnyG - pBase.xauCnyG) / pBase.xauCnyG) * 100).toFixed(2)),
+        change1h: parseFloat((((p1h.xauCnyG - pBase.xauCnyG) / pBase.xauCnyG) * 100).toFixed(2))
+      },
+      DOMESTIC_PREMIUM: {
+        change5m: pBase.premium && p5m.premium ? parseFloat((((p5m.premium - pBase.premium) / pBase.premium) * 100).toFixed(2)) : getMockFor("DOMESTIC_PREMIUM").change5m,
+        change1h: pBase.premium && p1h.premium ? parseFloat((((p1h.premium - pBase.premium) / pBase.premium) * 100).toFixed(2)) : getMockFor("DOMESTIC_PREMIUM").change1h
+      }
+    };
+  } else {
+    return {
+      XAU_USD: getMockFor("XAU_USD"),
+      AU9999: getMockFor("AU9999"),
+      USD_CNH: getMockFor("USD_CNH"),
+      XAU_CNY_G: getMockFor("XAU_CNY_G"),
+      DOMESTIC_PREMIUM: getMockFor("DOMESTIC_PREMIUM")
+    };
   }
 });
 

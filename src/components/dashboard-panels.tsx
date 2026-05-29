@@ -180,7 +180,15 @@ export function SentimentGauge({ data, range }: { data: DashboardPayload; range:
   );
 }
 
-export function EventFeed({ events }: { events: NewsEvent[] }) {
+export function EventFeed({
+  events,
+  onSelectEvent,
+  selectedEventId
+}: {
+  events: NewsEvent[];
+  onSelectEvent?: (event: NewsEvent) => void;
+  selectedEventId?: string;
+}) {
   const { t } = useTranslation();
   if (!events.length) return <div className="empty-state">{t("noEvents")}</div>;
 
@@ -198,7 +206,19 @@ export function EventFeed({ events }: { events: NewsEvent[] }) {
         const dotClass = event.direction === "bullish" ? "bullish" : event.direction === "bearish" ? "bearish" : "neutral";
 
         return (
-          <a key={event.id} href={event.url} target="_blank" rel="noreferrer" className="event-feed-item">
+          <a
+            key={event.id}
+            href={event.url || "#"}
+            target="_blank"
+            rel="noreferrer"
+            className={`event-feed-item ${selectedEventId === event.id ? "active-event" : ""}`}
+            onClick={(e) => {
+              if (onSelectEvent) {
+                e.preventDefault();
+                onSelectEvent(event);
+              }
+            }}
+          >
             <div className="event-item-top">
               <div className="event-item-meta">
                 <span className={`event-dot-marker ${dotClass}`} />

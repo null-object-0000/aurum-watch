@@ -1,6 +1,7 @@
 import React from "react";
-import type { DashboardPayload, TimeRange } from "../types";
+import type { DashboardPayload, NewsEvent, TimeRange } from "../types";
 import { EventFeed, Explanation, PredictionTable, SentimentGauge, Signal, SourceStatus } from "../components/dashboard-panels";
+import { EventDetailSidebar } from "../components/EventDetailSidebar";
 import { Panel } from "../components/Panel";
 import { PriceChart } from "../components/PriceChart";
 import { QuoteCard } from "../components/QuoteCard";
@@ -15,6 +16,7 @@ interface DashboardProps {
 export function Dashboard({ data, range, onRangeChange }: DashboardProps) {
   const { t } = useTranslation();
   const [sentimentRange, setSentimentRange] = React.useState<"1D" | "7D" | "30D">("1D");
+  const [selectedEvent, setSelectedEvent] = React.useState<NewsEvent | null>(null);
 
   if (!data) return <div className="loading">{t("connectingData")}</div>;
 
@@ -69,7 +71,11 @@ export function Dashboard({ data, range, onRangeChange }: DashboardProps) {
           <SentimentGauge data={data} range={sentimentRange} />
         </Panel>
         <Panel className="events-panel" title={t("eventFeed")} hint={t("latest")} action={viewAllAction}>
-          <EventFeed events={data.events} />
+          <EventFeed
+            events={data.events}
+            onSelectEvent={(ev) => setSelectedEvent(selectedEvent?.id === ev.id ? null : ev)}
+            selectedEventId={selectedEvent?.id}
+          />
         </Panel>
         <Panel className="signal-panel" title={t("signalConclusion")}>
           <Signal data={data} />
@@ -84,6 +90,14 @@ export function Dashboard({ data, range, onRangeChange }: DashboardProps) {
           <SourceStatus sources={data.sources} />
         </Panel>
       </section>
+
+      {selectedEvent && (
+        <EventDetailSidebar
+          event={selectedEvent}
+          onClose={() => setSelectedEvent(null)}
+        />
+      )}
     </div>
   );
 }
+
