@@ -68,9 +68,14 @@ export function App() {
 
   // ── Initialization check ──────────────────────────────────────────────
   React.useEffect(() => {
-    fetch("/api/init-status")
-      .then((r) => r.json())
-      .then((status: InitStatus) => {
+    let cancelled = false;
+
+    async function checkInit(attempt = 0) {
+      try {
+        const r = await fetch("/api/init-status");
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const status: InitStatus = await r.json();
+        if (cancelled) return;
         setInitStatus(status);
         if (status.initialized) {
           setRoute(getRouteFromHash());
@@ -78,8 +83,20 @@ export function App() {
           setRoute("init");
           window.location.hash = "#/";
         }
-      })
-      .catch(() => setRoute("dashboard"));
+      } catch {
+        if (cancelled) return;
+        // Retry with exponential backoff (max 5 attempts: ~1s, 2s, 4s, 8s, 16s)
+        if (attempt < 5) {
+          setTimeout(() => checkInit(attempt + 1), Math.min(1000 * 2 ** attempt, 16000));
+        } else {
+          // After all retries failed, fall back to dashboard so the app isn't stuck
+          setRoute("dashboard");
+        }
+      }
+    }
+
+    checkInit();
+    return () => { cancelled = true; };
   }, []);
 
   React.useEffect(() => {
