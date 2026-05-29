@@ -1,4 +1,4 @@
-.chart-panel { grid-column: span 1; grid-row: span 2; }
+.chart-panel { }
 .chart-shell { padding-bottom: 12px; position: relative; }
 .chart-shell > header { margin-bottom: 6px; }
 .price-module { display: grid; gap: 8px; }

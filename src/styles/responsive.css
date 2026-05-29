@@ -1,6 +1,9 @@
 @media (max-width: 1180px) {
   .metric-grid, .content-grid { grid-template-columns: 1fr 1fr; }
   .chart-panel { grid-column: span 2; }
+  .sentiment-panel, .events-panel, .signal-panel, .prediction-panel, .explanation-panel, .status-panel {
+    grid-column: span 1;
+  }
   .chart-toolbar { padding-right: 310px; }
 }
 
@@ -37,6 +40,9 @@
   .topbar-menu-btn { display: grid; }
   .metric-grid, .content-grid { grid-template-columns: 1fr; }
   .chart-panel { grid-column: auto; }
+  .sentiment-panel, .events-panel, .signal-panel, .prediction-panel, .explanation-panel, .status-panel {
+    grid-column: auto;
+  }
   .chart-toolbar { padding-right: 0; padding-top: 36px; }
   .chart-controls { left: 14px; right: auto; max-width: calc(100% - 28px); overflow-x: auto; }
   .event-feed a { grid-template-columns: 12px 44px 1fr auto; }

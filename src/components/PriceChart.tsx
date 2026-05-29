@@ -49,7 +49,7 @@ export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChart
       layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: theme.muted, attributionLogo: false },
       grid: { vertLines: { color: theme.grid }, horzLines: { color: theme.grid } },
       localization: { timeFormatter: (time: unknown) => chartTooltipTime(Number(time)) },
-      rightPriceScale: { borderColor: theme.border },
+      rightPriceScale: { borderColor: theme.border, minimumWidth: 65 },
       timeScale: {
         borderColor: theme.border,
         visible: true,
@@ -65,8 +65,8 @@ export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChart
       layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: theme.muted, attributionLogo: false },
       grid: { vertLines: { color: theme.grid }, horzLines: { color: theme.grid } },
       localization: { timeFormatter: (time: unknown) => chartTooltipTime(Number(time)) },
-      rightPriceScale: { visible: false },
-      leftPriceScale: { visible: true, borderColor: theme.border },
+      rightPriceScale: { visible: true, borderColor: theme.border, minimumWidth: 65 },
+      leftPriceScale: { visible: false },
       timeScale: {
         borderColor: theme.border,
         visible: true,
@@ -75,7 +75,13 @@ export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChart
         tickMarkFormatter: (time: unknown) => chartTickTime(Number(time), range)
       }
     });
-    const bars = sentimentChart.addSeries(HistogramSeries, { priceScaleId: "left", priceFormat: { type: "volume" } });
+    const bars = sentimentChart.addSeries(HistogramSeries, {
+      priceScaleId: "right",
+      priceFormat: {
+        type: "custom",
+        formatter: (price: number) => price > 0 ? `+${price.toFixed(0)}` : price.toFixed(0),
+      }
+    });
 
     chartInstancesRef.current = {
       priceChart,
@@ -84,6 +90,28 @@ export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChart
       auLine: null,
       bars
     };
+
+    // Synchronize visible logical ranges between priceChart and sentimentChart
+    let isSyncing = false;
+    const priceTimeScale = priceChart.timeScale();
+    const sentimentTimeScale = sentimentChart.timeScale();
+
+    const handlePriceRangeChange = (logicalRange: any) => {
+      if (isSyncing || !logicalRange) return;
+      isSyncing = true;
+      sentimentTimeScale.setVisibleLogicalRange(logicalRange);
+      isSyncing = false;
+    };
+
+    const handleSentimentRangeChange = (logicalRange: any) => {
+      if (isSyncing || !logicalRange) return;
+      isSyncing = true;
+      priceTimeScale.setVisibleLogicalRange(logicalRange);
+      isSyncing = false;
+    };
+
+    priceTimeScale.subscribeVisibleLogicalRangeChange(handlePriceRangeChange);
+    sentimentTimeScale.subscribeVisibleLogicalRangeChange(handleSentimentRangeChange);
 
     const handleResize = () => {
       if (priceRef.current && sentimentRef.current) {
@@ -95,6 +123,8 @@ export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChart
 
     return () => {
       window.removeEventListener("resize", handleResize);
+      priceTimeScale.unsubscribeVisibleLogicalRangeChange(handlePriceRangeChange);
+      sentimentTimeScale.unsubscribeVisibleLogicalRangeChange(handleSentimentRangeChange);
       priceChart.remove();
       sentimentChart.remove();
       chartInstancesRef.current = null;
