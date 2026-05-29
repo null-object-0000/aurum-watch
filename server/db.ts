@@ -358,8 +358,8 @@ export function getDatasetStats(): DatasetStat[] {
   stats.push({
     id: "NEWS",
     name: "舆情新闻事件",
-    activeProvider: "GDELT",
-    providers: [{ name: "GDELT", configured: true }],
+    activeProvider: "NewsNow",
+    providers: [{ name: "NewsNow", configured: true }],
     dataCount: eventsCount,
     earliestData: eventsRange.earliest,
     latestData: eventsRange.latest,

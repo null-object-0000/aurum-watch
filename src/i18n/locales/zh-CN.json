@@ -36,7 +36,7 @@
   "bullishStrength": "利多强度",
   "bearishStrength": "利空强度",
   "neutralShare": "中性占比",
-  "noEvents": "GDELT 新闻源暂未返回事件。",
+  "noEvents": "NewsNow 新闻源暂未返回事件。",
   "updatedTime": "更新时间",
   "horizon": "周期",
   "bias": "方向",

@@ -136,7 +136,7 @@ app.get("/api/settings", async () => {
   return {
     oanda: { configured: Boolean(config.oandaToken), env: config.oandaEnv },
     au9999: { configured: Boolean(config.aktoolsBaseUrl), provider: "AKTools", ...aktools },
-    news: { provider: "GDELT", query: config.newsQuery },
+    news: { provider: "NewsNow", baseUrl: config.newsnowBaseUrl },
     storage: { databasePath: config.databasePath }
   };
 });

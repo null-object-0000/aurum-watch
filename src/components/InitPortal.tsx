@@ -146,7 +146,7 @@ export function InitPortal({ status, onDone, onStatusRefresh }: InitPortalProps)
           ? `可用${status.aktoolsVersion ? ` · ${status.aktoolsVersion}` : ""}`
           : `不可用${status.aktoolsError ? ` · ${status.aktoolsError}` : ""}`
     },
-    { label: "GDELT 新闻源", ok: true, hint: "公开免费，无需配置" }
+    { label: "NewsNow 新闻源", ok: true, hint: "公开免费，无需配置" }
   ];
 
   const progressPct = syncJob && syncJob.totalDays > 0

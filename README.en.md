@@ -10,7 +10,7 @@ Aurum Watch is a deployable gold market monitor and sentiment-impact forecasting
 - No Settings page for now; all configuration is managed by the backend `.env`.
 - Real data only. The app does not generate mock market, news, or prediction data.
 - OANDA provides XAU/USD and USD/CNH. Only `OANDA_API_TOKEN` is required; the backend discovers the account id from OANDA.
-- GDELT provides real news events.
+- NewsNow provides real news events.
 - AU9999 is read from AKTools `spot_quotations_sge(symbol="Au99.99")`.
 - SQLite persists quote snapshots and news events.
 - PWA manifest, service worker, offline fallback, and Docker Compose are included.

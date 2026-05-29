@@ -33,7 +33,7 @@ interface RuntimeSettings {
   };
   news?: {
     provider: string;
-    query: string;
+    baseUrl?: string;
   };
   storage?: {
     databasePath: string;
@@ -74,10 +74,10 @@ export function Settings() {
         : (runtimeSettings?.au9999?.error ?? (preferences.language === "en-US" ? "Unreachable or not configured" : "未配置或不可用"))
     },
     {
-      name: "GDELT",
+      name: "NewsNow",
       status: "ok",
-      detail: runtimeSettings?.news?.query 
-        ? `query: ${runtimeSettings.news.query}` 
+      detail: runtimeSettings?.news?.baseUrl 
+        ? `url: ${runtimeSettings.news.baseUrl}` 
         : preferences.language === "en-US" ? "Public news sources" : "公开新闻源"
     }
   ];

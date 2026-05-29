@@ -10,7 +10,7 @@
 - 暂不提供 Settings 页面；所有配置通过后端 `.env` 管理。
 - 只使用真实数据，不生成 mock 行情、mock 新闻或 mock 预测数据。
 - OANDA 提供 XAU/USD 和 USD/CNH；只需要配置 `OANDA_API_TOKEN`，后端会自动从 OANDA 查询可用账户 ID。
-- GDELT 提供真实新闻事件。
+- NewsNow 提供真实新闻事件。
 - AU9999 从 AKTools 的 `spot_quotations_sge(symbol="Au99.99")` 读取。
 - SQLite 持久化行情快照和新闻事件。
 - 已包含 PWA manifest、service worker、离线兜底页和 Docker Compose。
