@@ -153,9 +153,9 @@ app.get("/api/tasks", async () => ({
 const RANGE_CONFIG = {
   "1H":  { intervalSeconds: 60,     lookbackHours: 1   },
   "4H":  { intervalSeconds: 300,    lookbackHours: 4   },
-  "1D":  { intervalSeconds: 900,    lookbackHours: 24  },
-  "7D":  { intervalSeconds: 7200,   lookbackHours: 168 },
-  "30D": { intervalSeconds: 21600,  lookbackHours: 720 }
+  "1D":  { intervalSeconds: 1800,   lookbackHours: 24  },
+  "7D":  { intervalSeconds: 14400,  lookbackHours: 168 },
+  "30D": { intervalSeconds: 86400,  lookbackHours: 720 }
 } as const;
 
 app.get("/api/candles", async (request, reply) => {
@@ -200,8 +200,8 @@ async function buildCandles(range: keyof typeof RANGE_CONFIG, timezoneOffsetMinu
 
   const recentXauTicks = getRecentTicks("XAU_USD", oneHourAgo);
   const recentAuTicks  = getRecentTicks("AU9999",  oneHourAgo);
-  aggregateTicksIntoMap(recentXauTicks, intervalSeconds, timeMap, "xauUsd");
-  aggregateTicksIntoMap(recentAuTicks,  intervalSeconds, timeMap, "au9999");
+  aggregateTicksIntoMap(recentXauTicks, intervalSeconds, timeMap, "xauUsd", timezoneOffsetMinutes);
+  aggregateTicksIntoMap(recentAuTicks,  intervalSeconds, timeMap, "au9999", timezoneOffsetMinutes);
 
   const events = latest?.events ?? getAllEventsFromDb();
   const sorted = Array.from(timeMap.values()).sort(
@@ -214,10 +214,11 @@ function aggregateTicksIntoMap(
   ticks: Array<{ time: string; price: number }>,
   intervalSeconds: number,
   map: Map<string, CandlePoint>,
-  field: "xauUsd" | "au9999"
+  field: "xauUsd" | "au9999",
+  timezoneOffsetMinutes = 0
 ) {
   for (const tick of ticks) {
-    const slotTime = alignToSlot(tick.time, intervalSeconds);
+    const slotTime = alignToSlot(tick.time, intervalSeconds, timezoneOffsetMinutes);
     const existing = map.get(slotTime) ?? { time: slotTime, xauUsd: null, au9999: null, sentiment: 0 };
     map.set(slotTime, { ...existing, [field]: tick.price });
   }
@@ -979,10 +980,13 @@ function getCurrentMinuteISO(): string {
   return d.toISOString();
 }
 
-function alignToSlot(isoTime: string, intervalSeconds: number): string {
+function alignToSlot(isoTime: string, intervalSeconds: number, timezoneOffsetMinutes = 0): string {
+  const offsetSeconds = timezoneOffsetMinutes * 60;
   const epochSec = Math.floor(new Date(isoTime).getTime() / 1000);
-  const slotSec = Math.floor(epochSec / intervalSeconds) * intervalSeconds;
-  return new Date(slotSec * 1000).toISOString();
+  const localEpochSec = epochSec - offsetSeconds;
+  const slotLocalSec = Math.floor(localEpochSec / intervalSeconds) * intervalSeconds;
+  const slotUtcSec = slotLocalSec + offsetSeconds;
+  return new Date(slotUtcSec * 1000).toISOString();
 }
 
 function applyEventSentiment(candles: CandlePoint[], events: NewsEvent[]): CandlePoint[] {

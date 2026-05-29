@@ -244,7 +244,7 @@ export function getAggregatedCandles(
       `
       SELECT
         datetime(
-          ((CAST(strftime('%s', time) AS INTEGER) - @offsetSeconds) / @interval) * @interval + @offsetSeconds,
+          CAST((CAST(strftime('%s', time) AS INTEGER) - @offsetSeconds) / @interval AS INTEGER) * @interval + @offsetSeconds,
           'unixepoch'
         ) AS slot,
         AVG(price) AS price

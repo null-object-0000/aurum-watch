@@ -17,9 +17,9 @@ const TROY_OUNCE_GRAMS = 31.1034768;
 const RANGE_GRANULARITY: Record<TimeRange, string> = {
   "1H": "1m",
   "4H": "5m",
-  "1D": "15m",
-  "7D": "2h",
-  "30D": "6h"
+  "1D": "30m",
+  "7D": "4h",
+  "30D": "1D"
 };
 
 export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChartProps) {
