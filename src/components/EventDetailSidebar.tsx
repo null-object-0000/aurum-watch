@@ -1,5 +1,5 @@
 import React from "react";
-import { X, Star, Loader2 } from "lucide-react";
+import { X, Star, Loader2, ExternalLink, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { NewsEvent } from "../types";
 
@@ -45,11 +45,18 @@ function getCategorySlug(category: string) {
   return mapping[category] || "default";
 }
 
-export function EventDetailSidebar({ event, onClose }: EventDetailSidebarProps) {
+export function EventDetailSidebar({ event: propEvent, onClose }: EventDetailSidebarProps) {
   const { t } = useTranslation();
   const [selectedHorizon, setSelectedHorizon] = React.useState<string>("1天");
   const [reaction, setReaction] = React.useState<ReactionPayload | null>(null);
   const [loading, setLoading] = React.useState<boolean>(false);
+  const [analyzing, setAnalyzing] = React.useState<boolean>(false);
+  const [event, setEvent] = React.useState<NewsEvent>(propEvent);
+
+  // Sync from parent prop
+  React.useEffect(() => {
+    setEvent(propEvent);
+  }, [propEvent]);
 
   React.useEffect(() => {
     setLoading(true);
@@ -65,6 +72,33 @@ export function EventDetailSidebar({ event, onClose }: EventDetailSidebarProps) 
         setLoading(false);
       });
   }, [event.id]);
+
+  const handleTriggerAnalysis = async () => {
+    setAnalyzing(true);
+    try {
+      const res = await fetch("/api/tasks/llm-analysis/trigger", { method: "POST" });
+      if (!res.ok) throw new Error("Trigger failed");
+      // Poll until LLM analysis completes
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const stateRes = await fetch("/api/tasks/llm-analysis");
+        const state = await stateRes.json();
+        if (state.status === "done" || state.status === "error") break;
+      }
+      // Refresh dashboard to get updated event data
+      const dashRes = await fetch("/api/dashboard");
+      const dash = await dashRes.json();
+      const updated = dash.events?.find((e: NewsEvent) => e.id === event.id);
+      if (updated) {
+        setEvent(updated);
+        setReaction(null); // force reaction re-fetch with new event impact
+      }
+    } catch (err) {
+      console.error("Failed to trigger analysis:", err);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
 
   const confidence = React.useMemo(() => {
     // Generate an aesthetic, consistent rating confidence percentage based on event parameters
@@ -307,6 +341,30 @@ export function EventDetailSidebar({ event, onClose }: EventDetailSidebarProps) 
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div className="sidebar-actions">
+        {event.url && (
+          <a
+            href={event.url}
+            target="_blank"
+            rel="noreferrer"
+            className="sidebar-action-btn"
+          >
+            <ExternalLink size={14} />
+            查看原文
+          </a>
+        )}
+        {!event.llmAnalyzed && (
+          <button
+            className="sidebar-action-btn sidebar-action-primary"
+            onClick={handleTriggerAnalysis}
+            disabled={analyzing}
+          >
+            <Sparkles size={14} className={analyzing ? "animate-spin" : ""} />
+            {analyzing ? "分析中..." : "立即 AI 分析"}
+          </button>
+        )}
       </div>
     </aside>
   );

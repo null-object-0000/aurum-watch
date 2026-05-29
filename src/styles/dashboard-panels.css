@@ -908,3 +908,49 @@
   color: var(--secondary-foreground);
   border: 1px solid var(--border);
 }
+
+/* ───────── Sidebar action buttons ───────── */
+
+.sidebar-actions {
+  display: flex;
+  gap: 8px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  color: var(--foreground);
+  text-decoration: none;
+  transition: all 0.15s;
+}
+
+.sidebar-action-btn:hover {
+  background: var(--accent);
+}
+
+.sidebar-action-primary {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+
+.sidebar-action-primary:hover {
+  background: color-mix(in srgb, var(--primary) 80%, black);
+  color: var(--primary-foreground);
+  border-color: transparent;
+}
+
+.sidebar-action-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
