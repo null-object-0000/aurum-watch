@@ -53,8 +53,8 @@ import type { CandlePoint, DashboardPayload, NewsEvent, Quote } from "./types.js
 let latest: DashboardPayload | null = null;
 let lastMinute = getCurrentMinuteISO();
 let oandaStreamStatus: { state: "connecting" | "connected" | "error" | "stopped"; detail: string } = {
-  state: "stopped",
-  detail: "OANDA pricing stream not started"
+  state: config.oandaToken ? "stopped" : "stopped",
+  detail: config.oandaToken ? "OANDA pricing stream not started" : "OANDA 未配置，行情来自计划刷新"
 };
 let pendingDashboardRefresh: ReturnType<typeof setTimeout> | null = null;
 let oandaStreamQueue = Promise.resolve();
@@ -140,6 +140,11 @@ app.get("/api/settings", async () => {
     oanda: { configured: Boolean(config.oandaToken), env: config.oandaEnv },
     au9999: { configured: Boolean(config.aktoolsBaseUrl), provider: "AKTools", ...aktools },
     news: { provider: "NewsNow", baseUrl: config.newsnowBaseUrl },
+    llm: {
+      configured: isLlmConfigured(),
+      model: isLlmConfigured() ? config.llmModel : null,
+      provider: isLlmConfigured() ? new URL(config.llmBaseUrl).hostname : null
+    },
     storage: { databasePath: config.databasePath }
   };
 });
@@ -150,6 +155,33 @@ app.get("/api/tasks", async () => ({
   realtime: realtimeTaskStatuses(),
   scheduled: scheduledTaskStatuses()
 }));
+
+app.post("/api/tasks/llm-analysis/trigger", async (_request, reply) => {
+  if (!isLlmConfigured()) {
+    reply.status(400).send({ error: "LLM 未配置，请设置 LLM_API_KEY" });
+    return;
+  }
+  // 后台运行，立即返回
+  runTrackedTask(scheduledTaskState.llmAnalysis, runScheduledLlmAnalysis)
+    .catch((err) => app.log.error(err));
+  return { ok: true, message: "LLM 新闻情绪分析任务已触发" };
+});
+
+app.get("/api/tasks/llm-analysis", async () => {
+  const state = getLlmTaskState();
+  return {
+    status: scheduledTaskState.llmAnalysis.status,
+    lastStartedAt: state.lastStartedAt,
+    lastFinishedAt: state.lastFinishedAt,
+    lastSuccessAt: state.lastSuccessAt,
+    lastError: state.lastError,
+    nextRunAt: scheduledTaskState.llmAnalysis.nextRunAt,
+    intervalMs: config.llmAnalysisIntervalMs,
+    logs: state.logs,
+    progress: state.progress,
+    lastProcessedCount: state.lastProcessedCount
+  };
+});
 
 // ─── Candles ──────────────────────────────────────────────────────────────
 
@@ -514,26 +546,26 @@ function getPriceAtOrNear(symbol: string, targetTimeIso: string, maxDiffMs = 15 
   const targetMs = new Date(targetTimeIso).getTime();
   const startTime = new Date(targetMs - maxDiffMs).toISOString();
   const endTime = new Date(targetMs + maxDiffMs).toISOString();
-  
+
   const rows = db.prepare(`
-    SELECT time, price FROM history_minutes 
+    SELECT time, price FROM history_minutes
     WHERE symbol = ? AND time >= ? AND time <= ?
   `).all(symbol, startTime, endTime) as Array<{ time: string; price: number }>;
-  
+
   const allRows = [...rows];
-  
+
   try {
     const tickRows = db.prepare(`
-      SELECT time, price FROM ticks 
+      SELECT time, price FROM ticks
       WHERE symbol = ? AND time >= ? AND time <= ?
     `).all(symbol, startTime, endTime) as Array<{ time: string; price: number }>;
     allRows.push(...tickRows);
   } catch (e) {
     // ignore
   }
-  
+
   if (!allRows.length) return null;
-  
+
   let bestRow = allRows[0];
   let minDiff = Math.abs(new Date(bestRow.time).getTime() - targetMs);
   for (const row of allRows) {
@@ -543,66 +575,82 @@ function getPriceAtOrNear(symbol: string, targetTimeIso: string, maxDiffMs = 15 
       bestRow = row;
     }
   }
-  
+
   return bestRow.price;
 }
 
-function getEventReactionPrices(eventTime: string) {
+/** 检查 local DB 是否已有事件时间附近的指定 symbol 的历史数据 */
+function hasDataNear(symbol: string, targetTimeIso: string): boolean {
+  const targetMs = new Date(targetTimeIso).getTime();
+  const startTime = new Date(targetMs - 15 * 60 * 1000).toISOString();
+  const endTime = new Date(targetMs + 75 * 60 * 1000).toISOString();
+  const row = db.prepare(`
+    SELECT 1 FROM history_minutes
+    WHERE symbol = ? AND time >= ? AND time <= ? LIMIT 1
+  `).get(symbol, startTime, endTime);
+  return !!row;
+}
+
+/**
+ * 从 OANDA 拉取事件当天历史 M1 K 线，存入本地 history_minutes。
+ * 这样后续 getPriceAtOrNear 就能命中。
+ */
+async function supplementMissingHistory(eventTime: string) {
+  const symbols: Array<"XAU_USD" | "USD_CNH"> = ["XAU_USD", "USD_CNH"];
+  const missing = symbols.filter((s) => !hasDataNear(s, eventTime));
+  if (!missing.length) return;
+
+  const eventDate = new Date(eventTime).toISOString().slice(0, 10);
+
+  for (const symbol of missing) {
+    try {
+      const candles = await fetchOandaCandlesForDay(symbol, eventDate);
+      const rows = candles.map((c) => ({
+        symbol,
+        price: Number(c.mid.c),
+        time: c.time
+      }));
+      if (rows.length) bulkSaveHistoryMinutes(rows);
+    } catch (err) {
+      app.log.warn(`[Reaction] Failed to fetch ${symbol} history for ${eventDate}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+}
+
+async function getEventReactionPrices(eventTime: string) {
   const tBase = eventTime;
   const t5m = new Date(new Date(eventTime).getTime() + 5 * 60 * 1000).toISOString();
   const t1h = new Date(new Date(eventTime).getTime() + 60 * 60 * 1000).toISOString();
-  
+
   const getPricesAt = (timeIso: string) => {
     const xau = getPriceAtOrNear("XAU_USD", timeIso);
     const au = getPriceAtOrNear("AU9999", timeIso);
     const cnh = getPriceAtOrNear("USD_CNH", timeIso);
-    
+
     if (xau === null || cnh === null) return null;
-    
+
     const xauCnyG = (xau * cnh) / 31.1034768;
     const premium = au !== null ? au - xauCnyG : null;
-    
+
     return { xau, au, cnh, xauCnyG, premium };
   };
-  
-  const pBase = getPricesAt(tBase);
-  const p5m = getPricesAt(t5m);
-  const p1h = getPricesAt(t1h);
-  
-  if (!pBase || !p5m || !p1h) return null;
-  
-  return { pBase, p5m, p1h };
-}
 
-function getMockReaction(symbol: string, impact: number, id: string) {
-  const hashInt = id.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  const directionMultiplier = impact > 0 ? 1 : impact < 0 ? -1 : 0;
-  
-  let baseChangePct = 0;
-  if (directionMultiplier !== 0) {
-    const baseVal = (Math.abs(impact) / 100) * 0.5;
-    const variation = ((hashInt % 10) / 100);
-    baseChangePct = (baseVal + variation) * directionMultiplier;
-  } else {
-    baseChangePct = ((hashInt % 10) - 5) / 100;
+  // First attempt: use local data
+  let pBase = getPricesAt(tBase);
+  let p5m = getPricesAt(t5m);
+  let p1h = getPricesAt(t1h);
+
+  // If any required prices missing, try supplementing from OANDA
+  if (!pBase || !p5m || !p1h) {
+    await supplementMissingHistory(eventTime);
+    pBase = getPricesAt(tBase);
+    p5m = getPricesAt(t5m);
+    p1h = getPricesAt(t1h);
   }
-  
-  let factor = 1;
-  if (symbol === "DOMESTIC_PREMIUM") {
-    factor = 1.8;
-  } else if (symbol === "USD_CNH") {
-    factor = 0.3;
-  } else if (symbol === "AU9999") {
-    factor = 0.95;
-  }
-  
-  const val5m = baseChangePct * 0.3 * factor;
-  const val1h = baseChangePct * factor;
-  
-  return {
-    change5m: parseFloat(val5m.toFixed(2)),
-    change1h: parseFloat(val1h.toFixed(2))
-  };
+
+  if (!pBase || !p5m || !p1h) return null;
+
+  return { pBase, p5m, p1h };
 }
 
 app.get("/api/events/:id/reaction", async (request, reply) => {
@@ -613,10 +661,9 @@ app.get("/api/events/:id/reaction", async (request, reply) => {
     reply.status(404).send({ error: "Event not found" });
     return;
   }
-  
-  const reaction = getEventReactionPrices(event.time);
-  const getMockFor = (symbol: string) => getMockReaction(symbol, event.impact, event.id);
-  
+
+  const reaction = await getEventReactionPrices(event.time);
+
   if (reaction) {
     const { pBase, p5m, p1h } = reaction;
     return {
@@ -625,8 +672,8 @@ app.get("/api/events/:id/reaction", async (request, reply) => {
         change1h: parseFloat((((p1h.xau - pBase.xau) / pBase.xau) * 100).toFixed(2))
       },
       AU9999: {
-        change5m: pBase.au && p5m.au ? parseFloat((((p5m.au - pBase.au) / pBase.au) * 100).toFixed(2)) : getMockFor("AU9999").change5m,
-        change1h: pBase.au && p1h.au ? parseFloat((((p1h.au - pBase.au) / pBase.au) * 100).toFixed(2)) : getMockFor("AU9999").change1h
+        change5m: pBase.au !== null && p5m.au !== null ? parseFloat((((p5m.au - pBase.au) / pBase.au) * 100).toFixed(2)) : null,
+        change1h: pBase.au !== null && p1h.au !== null ? parseFloat((((p1h.au - pBase.au) / pBase.au) * 100).toFixed(2)) : null
       },
       USD_CNH: {
         change5m: parseFloat((((p5m.cnh - pBase.cnh) / pBase.cnh) * 100).toFixed(2)),
@@ -637,17 +684,17 @@ app.get("/api/events/:id/reaction", async (request, reply) => {
         change1h: parseFloat((((p1h.xauCnyG - pBase.xauCnyG) / pBase.xauCnyG) * 100).toFixed(2))
       },
       DOMESTIC_PREMIUM: {
-        change5m: pBase.premium && p5m.premium ? parseFloat((((p5m.premium - pBase.premium) / pBase.premium) * 100).toFixed(2)) : getMockFor("DOMESTIC_PREMIUM").change5m,
-        change1h: pBase.premium && p1h.premium ? parseFloat((((p1h.premium - pBase.premium) / pBase.premium) * 100).toFixed(2)) : getMockFor("DOMESTIC_PREMIUM").change1h
+        change5m: pBase.premium !== null && p5m.premium !== null ? parseFloat((((p5m.premium - pBase.premium) / pBase.premium) * 100).toFixed(2)) : null,
+        change1h: pBase.premium !== null && p1h.premium !== null ? parseFloat((((p1h.premium - pBase.premium) / pBase.premium) * 100).toFixed(2)) : null
       }
     };
   } else {
     return {
-      XAU_USD: getMockFor("XAU_USD"),
-      AU9999: getMockFor("AU9999"),
-      USD_CNH: getMockFor("USD_CNH"),
-      XAU_CNY_G: getMockFor("XAU_CNY_G"),
-      DOMESTIC_PREMIUM: getMockFor("DOMESTIC_PREMIUM")
+      XAU_USD: { change5m: null, change1h: null },
+      AU9999: { change5m: null, change1h: null },
+      USD_CNH: { change5m: null, change1h: null },
+      XAU_CNY_G: { change5m: null, change1h: null },
+      DOMESTIC_PREMIUM: { change5m: null, change1h: null }
     };
   }
 });
@@ -709,6 +756,35 @@ async function fetchAndSyncDataset(datasetId: string) {
     case "NEWS": {
       const news = await fetchNewsEvents(true);
       saveEvents(news.events);
+      // 手动拉取新闻后触发一次 LLM 分析
+      if (news.events.length && isLlmConfigured()) {
+        try {
+          const llmResults = await runLlmAnalysis(
+            news.events.map((e) => ({ id: e.id, title: e.title }))
+          );
+          if (llmResults.size > 0) {
+            for (const event of news.events) {
+              const result = llmResults.get(event.id);
+              if (result) {
+                event.category = result.category;
+                event.direction = result.direction;
+                event.impact = result.direction === "bullish"
+                  ? result.impactScore
+                  : result.direction === "bearish"
+                    ? -result.impactScore
+                    : 0;
+                event.summary = result.summary || event.title;
+                event.llmImpactScore = result.impactScore;
+                event.llmAnalyzed = true;
+              }
+            }
+            saveEvents(news.events);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          app.log.warn("[LLM] Manual fetch analysis failed: " + msg);
+        }
+      }
       break;
     }
     case "all": {
@@ -731,8 +807,12 @@ async function fetchAndSyncDataset(datasetId: string) {
 const server = await app.listen({ port: config.port, host: "0.0.0.0" });
 app.log.info(`Aurum Watch API listening on ${server}`);
 
-// Initial refresh
-await refreshLiveData();
+// Initial refresh（首次失败不影响定时器启动）
+try {
+  await refreshLiveData();
+} catch (err) {
+  app.log.warn("Initial refresh failed, background tasks will still start: " + (err instanceof Error ? err.message : err));
+}
 startOandaStreamWorker();
 
 // Per-second tick timer
@@ -745,6 +825,13 @@ setInterval(() => {
   scheduledTaskState.fullRefresh.nextRunAt = new Date(Date.now() + config.refreshIntervalMs).toISOString();
   runTrackedTask(scheduledTaskState.fullRefresh, refreshLiveData).catch((err) => app.log.error(err));
 }, config.refreshIntervalMs);
+
+// LLM 新闻情绪分析（独立定时任务，默认 15 分钟）
+scheduledTaskState.llmAnalysis.nextRunAt = new Date(Date.now() + config.llmAnalysisIntervalMs).toISOString();
+setInterval(() => {
+  scheduledTaskState.llmAnalysis.nextRunAt = new Date(Date.now() + config.llmAnalysisIntervalMs).toISOString();
+  runTrackedTask(scheduledTaskState.llmAnalysis, runScheduledLlmAnalysis).catch((err) => app.log.error(err));
+}, config.llmAnalysisIntervalMs);
 
 // ─── Refresh Logic ────────────────────────────────────────────────────────
 
@@ -800,8 +887,50 @@ async function refreshLiveData() {
   return latest;
 }
 
+/**
+ * 独立 LLM 分析任务：从 DB 读取当前缓存事件，调用 LLM 批量分析，
+ * 将结果合并回 events 后重新保存，触发看板刷新。
+ */
+async function runScheduledLlmAnalysis() {
+  if (!isLlmConfigured()) return;
+
+  const events = getAllEventsFromDb();
+  if (!events.length) return;
+
+  const llmResults = await runLlmAnalysis(
+    events.map((e) => ({ id: e.id, title: e.title }))
+  );
+
+  if (llmResults.size > 0) {
+    for (const event of events) {
+      const result = llmResults.get(event.id);
+      if (result) {
+        event.category = result.category;
+        event.direction = result.direction;
+        event.impact = result.direction === "bullish"
+          ? result.impactScore
+          : result.direction === "bearish"
+            ? -result.impactScore
+            : 0;
+        event.summary = result.summary || event.title;
+        event.llmImpactScore = result.impactScore;
+        event.llmAnalyzed = true;
+      }
+    }
+    saveEvents(events);
+  }
+
+  latest = await buildDashboardSnapshot();
+  broadcastUpdate();
+}
+
 function startOandaStreamWorker() {
   if (!config.oandaToken) return;
+
+  // 立即标记为运行中（连接建立后 onStatus 会更新更精确的状态）
+  realtimeTaskState.oandaStream.status = "running";
+  realtimeTaskState.oandaStream.lastStartedAt = new Date().toISOString();
+  oandaStreamStatus = { state: "connecting", detail: "正在连接 OANDA 行情流..." };
 
   const controller = new AbortController();
   const shutdown = () => controller.abort();
@@ -946,16 +1075,22 @@ function historyTaskStatus() {
 }
 
 function realtimeTaskStatuses() {
+  const oandaConfigured = Boolean(config.oandaToken);
+  // 已配置 OANDA 但流状态为 "stopped" → 说明正在启动中
+  const rawOandaStatus = realtimeTaskState.oandaStream.status;
+  const oandaStatus = oandaConfigured
+    ? (rawOandaStatus === "stopped" ? "running" : rawOandaStatus)
+    : "unconfigured";
   return [
     {
       id: "oanda-stream",
       kind: "realtime_worker",
       name: "OANDA 实时行情流",
-      status: realtimeTaskState.oandaStream.status,
-      detail: realtimeTaskState.oandaStream.status === "stopped"
-        ? `${oandaStreamStatus.detail}；看板仍会读取数据库快照，行情可能来自计划刷新。`
-        : oandaStreamStatus.detail,
-      lastSuccessAt: lastOandaStreamPriceAt ?? realtimeTaskState.oandaStream.lastSuccessAt,
+      status: oandaStatus,
+      detail: oandaConfigured
+        ? (rawOandaStatus === "stopped" ? "正在连接 OANDA 行情流..." : oandaStreamStatus.detail)
+        : "未配置 OANDA_API_TOKEN，行情来自计划刷新",
+      lastSuccessAt: oandaConfigured ? (lastOandaStreamPriceAt ?? realtimeTaskState.oandaStream.lastSuccessAt) : null,
       lastError: realtimeTaskState.oandaStream.lastError
     },
     {
@@ -1006,6 +1141,16 @@ function scheduledTaskStatuses() {
       nextRunAt: scheduledTaskState.minuteAggregation.nextRunAt,
       lastSuccessAt: scheduledTaskState.minuteAggregation.lastSuccessAt,
       lastError: scheduledTaskState.minuteAggregation.lastError
+    },
+    {
+      id: "llm-analysis",
+      kind: "scheduled_sync",
+      name: "LLM 新闻情绪分析",
+      status: scheduledTaskState.llmAnalysis.status,
+      intervalMs: config.llmAnalysisIntervalMs,
+      nextRunAt: scheduledTaskState.llmAnalysis.nextRunAt,
+      lastSuccessAt: scheduledTaskState.llmAnalysis.lastSuccessAt,
+      lastError: scheduledTaskState.llmAnalysis.lastError
     }
   ];
 }
@@ -1028,6 +1173,13 @@ async function buildDashboardSnapshot(options?: { oandaDetail?: string; newsDeta
       sourceFromQuote("USD/CNH", cnh, options?.oandaDetail ?? cnh?.source ?? "OANDA"),
       sourceFromQuote("AU9999", au, au?.error ?? au?.source ?? "AKTools/SGE"),
       { name: "News", status: options?.newsStatus ?? (newsCount > 0 ? "ok" : "stale"), detail: options?.newsDetail ?? `${newsCount} cached events` },
+      {
+        name: "LLM",
+        status: isLlmConfigured() ? "ok" : "unconfigured",
+        detail: isLlmConfigured()
+          ? `${events.filter((e) => e.llmAnalyzed).length} events analyzed`
+          : "未配置 LLM API Key，AI 分析不可用"
+      },
       { name: "Database", status: "ok", detail: config.databasePath }
     ],
     updatedAt: new Date().toISOString()

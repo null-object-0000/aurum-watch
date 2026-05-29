@@ -39,7 +39,8 @@ export function SentimentGauge({ data, range }: { data: DashboardPayload; range:
     const days = range === "1D" ? 1 : range === "7D" ? 7 : 30;
     const cutoff = Date.now() - days * 24 * 3600 * 1000;
     const filteredEvents = data.events.filter((e) => new Date(e.time).getTime() >= cutoff);
-    const targetEvents = filteredEvents.length ? filteredEvents : data.events;
+    const analyzedEvents = filteredEvents.filter((e) => e.llmAnalyzed);
+    const targetEvents = analyzedEvents.length ? analyzedEvents : filteredEvents;
 
     const bullish = targetEvents.filter((e) => e.impact > 0).reduce((sum, e) => sum + e.impact, 0);
     const bearish = Math.abs(targetEvents.filter((e) => e.impact < 0).reduce((sum, e) => sum + e.impact, 0));
@@ -190,51 +191,75 @@ export function EventFeed({
   selectedEventId?: string;
 }) {
   const { t } = useTranslation();
+  const [showNeutral, setShowNeutral] = React.useState(false);
+
   if (!events.length) return <div className="empty-state">{t("noEvents")}</div>;
+
+  const isRealNeutral = (e: NewsEvent) => e.llmAnalyzed && e.direction === "neutral";
+  const isUnanalyzed = (e: NewsEvent) => !e.llmAnalyzed;
+  const relevantEvents = events.filter((e) => !isRealNeutral(e));
+  const neutralCount = events.filter(isRealNeutral).length;
+  const displayEvents = showNeutral ? events : relevantEvents;
 
   return (
     <div className="event-feed-redesign">
-      {events.slice(0, 5).map((event) => {
-        const isBullish = event.impact > 0;
-        const isBearish = event.impact < 0;
-        const impactText = isBullish
-          ? `利多 +${event.impact}`
-          : isBearish
-            ? `利空 ${event.impact}`
-            : "中性";
-        const impactClass = isBullish ? "pos-text" : isBearish ? "neg-text" : "neutral-text";
-        const dotClass = event.direction === "bullish" ? "bullish" : event.direction === "bearish" ? "bearish" : "neutral";
+      <div className="event-feed-scroll">
+        {displayEvents.map((event) => {
+          const isUnanalyzed = !event.llmAnalyzed;
+          const isBullish = event.impact > 0;
+          const isBearish = event.impact < 0;
+          const impactText = isUnanalyzed
+            ? "待分析"
+            : isBullish
+              ? `利多 +${event.impact}`
+              : isBearish
+                ? `利空 ${event.impact}`
+                : "中性";
+          const impactClass = isUnanalyzed ? "neutral-text" : isBullish ? "pos-text" : isBearish ? "neg-text" : "neutral-text";
+          const dotClass = isUnanalyzed ? "neutral" : event.direction === "bullish" ? "bullish" : event.direction === "bearish" ? "bearish" : "neutral";
 
-        return (
-          <a
-            key={event.id}
-            href={event.url || "#"}
-            target="_blank"
-            rel="noreferrer"
-            className={`event-feed-item ${selectedEventId === event.id ? "active-event" : ""}`}
-            onClick={(e) => {
-              if (onSelectEvent) {
-                e.preventDefault();
-                onSelectEvent(event);
-              }
-            }}
-          >
-            <div className="event-item-top">
-              <div className="event-item-meta">
-                <span className={`event-dot-marker ${dotClass}`} />
-                <time>{new Date(event.time).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time>
-                <span className="event-source-name">{event.source}</span>
-                <span className={`event-category-badge category-${getCategorySlug(event.category)}`}>
-                  {mapCategoryName(event.category, t)}
-                </span>
+          return (
+            <a
+              key={event.id}
+              href={event.url || "#"}
+              target="_blank"
+              rel="noreferrer"
+              className={`event-feed-item ${selectedEventId === event.id ? "active-event" : ""}`}
+              onClick={(e) => {
+                if (onSelectEvent) {
+                  e.preventDefault();
+                  onSelectEvent(event);
+                }
+              }}
+            >
+              <div className="event-item-top">
+                <div className="event-item-meta">
+                  <span className={`event-dot-marker ${dotClass}`} />
+                  <time>{new Date(event.time).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time>
+                  <span className="event-source-name">{event.source}</span>
+                  {event.llmAnalyzed && <span className="event-llm-badge" title="LLM 分析">AI</span>}
+                  <span className={`event-category-badge category-${getCategorySlug(event.category)}`}>
+                    {mapCategoryName(event.category, t)}
+                  </span>
+                </div>
+                <span className={`event-impact-score ${impactClass}`}>{impactText}</span>
               </div>
-              <span className={`event-impact-score ${impactClass}`}>{impactText}</span>
-            </div>
-            <div className="event-item-title">{event.title}</div>
-            <div className="event-item-desc">{event.summary || event.title}</div>
-          </a>
-        );
-      })}
+              <div className="event-item-title">{event.title}</div>
+              <div className="event-item-desc">{event.summary || event.title}</div>
+            </a>
+          );
+        })}
+      </div>
+      {neutralCount > 0 && (
+        <button
+          className="event-feed-toggle-neutral"
+          onClick={() => setShowNeutral((v) => !v)}
+        >
+          {showNeutral
+            ? `收起 ${neutralCount} 条中性事件`
+            : `显示 ${neutralCount} 条中性事件`}
+        </button>
+      )}
     </div>
   );
 }
@@ -276,6 +301,7 @@ export function PredictionTable({ data }: { data: DashboardPayload }) {
           <th>{t("impactScore")}</th>
           <th>{t("confidence")}</th>
           <th>概率分布 (偏多 / 中性 / 偏空)</th>
+          <th>因子分解 <span className="factor-hint-icon" title="各因子得分 -100~+100">ⓘ</span></th>
         </tr>
       </thead>
       <tbody>
@@ -293,6 +319,21 @@ export function PredictionTable({ data }: { data: DashboardPayload }) {
               </td>
               <td className="confidence-cell">{row.confidence}%</td>
               <td className="prob-cell"><Probability probs={row.probabilities} /></td>
+              <td className="factor-cell">
+                {row.factorBreakdown ? (
+                  <span className="factor-tooltip-trigger" title={
+                    `技术面: ${row.factorBreakdown.technical > 0 ? "+" : ""}${row.factorBreakdown.technical} (权重 ${(row.factorBreakdown.weights.technical * 100).toFixed(0)}%)
+价差面: ${row.factorBreakdown.premium > 0 ? "+" : ""}${row.factorBreakdown.premium} (权重 ${(row.factorBreakdown.weights.premium * 100).toFixed(0)}%)
+情绪面: ${row.factorBreakdown.sentiment > 0 ? "+" : ""}${row.factorBreakdown.sentiment} (权重 ${(row.factorBreakdown.weights.sentiment * 100).toFixed(0)}%)`
+                  }>
+                    <span className={`factor-dot ${row.factorBreakdown.technical > 0 ? "pos" : row.factorBreakdown.technical < 0 ? "neg" : ""}`}>T</span>
+                    <span className={`factor-dot ${row.factorBreakdown.premium > 0 ? "pos" : row.factorBreakdown.premium < 0 ? "neg" : ""}`}>P</span>
+                    <span className={`factor-dot ${row.factorBreakdown.sentiment > 0 ? "pos" : row.factorBreakdown.sentiment < 0 ? "neg" : ""}`}>S</span>
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground text-xs">-</span>
+                )}
+              </td>
             </tr>
           );
         })}

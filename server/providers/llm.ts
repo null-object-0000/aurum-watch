@@ -22,6 +22,10 @@ interface LLMTaskState {
   nextRunAt: string | null;
   /** 本次分析处理的新条目数 */
   lastProcessedCount: number;
+  /** 详细运行日志 */
+  logs: string[];
+  /** 进度信息 */
+  progress: { total: number; done: number };
 }
 
 // ─── State ────────────────────────────────────────────────────────────────
@@ -37,7 +41,9 @@ const taskState: LLMTaskState = {
   lastErrorAt: null,
   lastError: null,
   nextRunAt: null,
-  lastProcessedCount: 0
+  lastProcessedCount: 0,
+  logs: [],
+  progress: { total: 0, done: 0 }
 };
 
 // ─── Public API ───────────────────────────────────────────────────────────
@@ -48,6 +54,25 @@ export function getLlmTaskState(): LLMTaskState {
 
 export function isLlmConfigured(): boolean {
   return Boolean(config.llmApiKey);
+}
+
+/** 追加一行运行日志 */
+export function appendLog(msg: string): void {
+  const ts = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  taskState.logs.push(`[${ts}] ${msg}`);
+  // 只保留最近 200 条
+  if (taskState.logs.length > 200) taskState.logs.splice(0, taskState.logs.length - 200);
+}
+
+/** 更新进度 */
+export function updateProgress(done: number, total: number): void {
+  taskState.progress = { done, total };
+}
+
+/** 重置日志和进度（每次任务开始前调用） */
+export function resetLlmTaskLogs(): void {
+  taskState.logs = [];
+  taskState.progress = { total: 0, done: 0 };
 }
 
 /**
@@ -103,12 +128,18 @@ export async function runLlmAnalysis(
 ): Promise<Map<string, LLMAnalysisResult>> {
   taskState.status = "running";
   taskState.lastStartedAt = new Date().toISOString();
+  resetLlmTaskLogs();
+
+  const uncachedCount = items.filter((item) => !analysisCache.has(item.id)).length;
+  taskState.lastProcessedCount = uncachedCount;
+
+  appendLog(`分析任务启动，共 ${items.length} 条事件，其中 ${uncachedCount} 条未缓存`);
 
   try {
-    const uncachedCount = items.filter((item) => !analysisCache.has(item.id)).length;
-    taskState.lastProcessedCount = uncachedCount;
+    const result = await analyzeNewsItemsWithLogging(items);
 
-    const result = await analyzeNewsItems(items);
+    const analyzedCount = result.size;
+    appendLog(`分析完成，成功分析 ${analyzedCount} 条事件`);
 
     taskState.status = "done";
     taskState.lastFinishedAt = new Date().toISOString();
@@ -117,12 +148,69 @@ export async function runLlmAnalysis(
 
     return result;
   } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown LLM error";
     taskState.status = "error";
     taskState.lastFinishedAt = new Date().toISOString();
     taskState.lastErrorAt = taskState.lastFinishedAt;
-    taskState.lastError = error instanceof Error ? error.message : "Unknown LLM error";
+    taskState.lastError = msg;
+    appendLog(`分析失败：${msg}`);
     throw error;
   }
+}
+
+/**
+ * 带日志的批量分析，逐批记录进度。
+ */
+async function analyzeNewsItemsWithLogging(
+  items: Array<{ id: string; title: string }>
+): Promise<Map<string, LLMAnalysisResult>> {
+  const resultMap = new Map<string, LLMAnalysisResult>();
+
+  const uncachedItems: Array<{ id: string; title: string }> = [];
+  for (const item of items) {
+    const cached = analysisCache.get(item.id);
+    if (cached) {
+      resultMap.set(item.id, cached);
+    } else {
+      uncachedItems.push(item);
+    }
+  }
+
+  const cachedCount = resultMap.size;
+  if (cachedCount > 0) appendLog(`缓存命中 ${cachedCount} 条，跳过`);
+
+  if (!uncachedItems.length || !config.llmApiKey) {
+    updateProgress(0, 0);
+    return resultMap;
+  }
+
+  const total = uncachedItems.length;
+  appendLog(`需要分析 ${total} 条，按每批最多 10 条调用 LLM`);
+
+  const BATCH_SIZE = 10;
+  for (let i = 0; i < uncachedItems.length; i += BATCH_SIZE) {
+    const batch = uncachedItems.slice(i, i + BATCH_SIZE);
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+    const totalBatches = Math.ceil(uncachedItems.length / BATCH_SIZE);
+
+    try {
+      appendLog(`[${batchNum}/${totalBatches}] 发送批次，${batch.length} 条...`);
+      const batchResults = await callLlmBatch(batch);
+      for (const result of batchResults) {
+        analysisCache.set(result.id, result);
+        resultMap.set(result.id, result);
+      }
+      updateProgress(resultMap.size - cachedCount, total);
+      appendLog(`[${batchNum}/${totalBatches}] 返回 ${batchResults.length} 条结果`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "未知错误";
+      appendLog(`[${batchNum}/${totalBatches}] 批次失败：${msg}`);
+      console.warn(`[LLM] Batch ${batchNum} failed:`, msg);
+    }
+  }
+
+  appendLog(`LLM 分析完毕，共处理 ${resultMap.size - cachedCount} 条`);
+  return resultMap;
 }
 
 // ─── LLM API Call ─────────────────────────────────────────────────────────

@@ -25,12 +25,9 @@ const targetSources: NewsNowSource[] = [
   { id: "cls-telegraph", name: "财联社" }
 ];
 
-// ─── 关键词降级方案（LLM 未配置或失败时使用）─────────────────────────────
+// ─── 相关性关键词过滤（仅保留黄金/宏观相关新闻）─────────────────────────
 
 const keywords = ["金", "美联储", "降息", "加息", "利率", "通胀", "CPI", "美元", "汇率", "人民币", "非农", "就业", "美债", "避险", "战争", "冲突"];
-
-const bullishTerms = ["避险", "战争", "降息", "地缘", "冲突", "买入", "通胀", "宽松", "上行", "支撑"];
-const bearishTerms = ["加息", "收紧", "鹰派", "下跌", "利空", "强劲", "打压", "美联储维持"];
 
 // ─── Cache ────────────────────────────────────────────────────────────────
 
@@ -153,9 +150,9 @@ export async function fetchNewsEvents(force = false): Promise<{ events: NewsEven
             keywords.some((kw) => item.title.includes(kw))
           );
 
-          // Map items to NewsEvents (preliminary, direction/category assigned by keyword fallback)
+          // Map items to NewsEvents with neutral defaults（LLM 会后续覆盖）
           for (const item of filtered) {
-            allFetchedEvents.push(toEventKeyword(item, source.name));
+            allFetchedEvents.push(toEventRaw(item, source.name));
           }
         } catch (err) {
           fetchErrors.push(`${source.id}: ${err instanceof Error ? err.message : "Unknown error"}`);
@@ -186,12 +183,13 @@ export async function fetchNewsEvents(force = false): Promise<{ events: NewsEven
     // Keep the top 20 most recent events
     const events = uniqueEvents.slice(0, 20);
 
-    // ── LLM 增强（若已配置）─────────────────────────────────────────────
+    // ── LLM 分析（若已配置）──────────────────────────────────────────────
     if (isLlmConfigured()) {
       try {
         const llmResults = await analyzeNewsItems(
           events.map((e) => ({ id: e.id, title: e.title }))
         );
+        let analyzedCount = 0;
         for (const event of events) {
           const result = llmResults.get(event.id);
           if (result) {
@@ -205,19 +203,27 @@ export async function fetchNewsEvents(force = false): Promise<{ events: NewsEven
             event.summary = result.summary || event.title;
             event.llmImpactScore = result.impactScore;
             event.llmAnalyzed = true;
+            analyzedCount++;
           }
         }
+        // 如果 LLM 一条都没分析成功（全失败），标记为错误
+        if (analyzedCount === 0) {
+          throw new Error("LLM returned no results for any event");
+        }
       } catch (llmErr) {
-        // LLM 失败不影响新闻抓取，降级使用关键词方案
-        console.warn("[News] LLM analysis failed, using keyword fallback:", llmErr instanceof Error ? llmErr.message : llmErr);
+        // LLM 失败后，全部标记为未分析，但保留原始事件
+        for (const event of events) {
+          event.llmAnalyzed = false;
+          event.llmImpactScore = null;
+        }
+        console.warn("[News] LLM analysis failed, events kept raw:", llmErr instanceof Error ? llmErr.message : llmErr);
       }
     }
-    // ────────────────────────────────────────────────────────────────────
 
     const llmCount = events.filter((e) => e.llmAnalyzed).length;
     const detail = llmCount > 0
       ? `${events.length} articles (${llmCount} LLM-analyzed)`
-      : `${events.length} articles from NewsNow (keyword mode)`;
+      : `${events.length} articles from NewsNow`;
 
     cachedResult = { events, status: "ok", detail };
     lastFetchTime = now;
@@ -230,42 +236,21 @@ export async function fetchNewsEvents(force = false): Promise<{ events: NewsEven
   }
 }
 
-// ─── 关键词方案（降级用）─────────────────────────────────────────────────
+// ─── 原始事件构造（无关键词猜测，LLM 会覆盖）──────────────────────────
 
-function toEventKeyword(item: NewsNowItem, sourceName: string): NewsEvent {
+function toEventRaw(item: NewsNowItem, sourceName: string): NewsEvent {
   const title = item.title.trim();
-  const lower = title.toLowerCase();
-  const dir = getDirection(lower);
-  const scoreVal = Math.min(48, Math.round(title.length / 3));
-  const impact = dir === "bullish" ? 25 + scoreVal : dir === "bearish" ? -25 - scoreVal : 0;
 
   return {
     id: crypto.createHash("sha1").update(item.url || title).digest("hex"),
     time: new Date(item.pubDate || item.time || Date.now()).toISOString(),
     source: sourceName,
     title,
-    category: classify(lower),
-    direction: dir,
-    impact: Math.max(-100, Math.min(100, impact)),
+    category: "黄金市场",
+    direction: "neutral",
+    impact: 0,
     summary: title,
     url: item.url,
     llmAnalyzed: false
   };
-}
-
-function classify(text: string) {
-  if (text.includes("美联储") || text.includes("降息") || text.includes("加息") || text.includes("利率")) return "美联储";
-  if (text.includes("美元") || text.includes("usd")) return "美元";
-  if (text.includes("债") || text.includes("国债")) return "美债";
-  if (text.includes("避险") || text.includes("地缘") || text.includes("冲突") || text.includes("乌克兰") || text.includes("中东")) return "地缘政治";
-  if (text.includes("通胀") || text.includes("cpi") || text.includes("ppi")) return "通胀";
-  return "黄金市场";
-}
-
-function getDirection(text: string): "bullish" | "bearish" | "neutral" {
-  const bullish = bullishTerms.some(term => text.includes(term));
-  const bearish = bearishTerms.some(term => text.includes(term));
-  if (bullish && !bearish) return "bullish";
-  if (bearish && !bullish) return "bearish";
-  return "neutral";
 }

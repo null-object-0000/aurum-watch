@@ -164,6 +164,32 @@
   flex-direction: column;
   gap: 0;
 }
+.event-feed-scroll {
+  display: flex;
+  flex-direction: column;
+  max-height: 460px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.event-feed-toggle-neutral {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 0;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.event-feed-toggle-neutral:hover {
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+  color: var(--foreground);
+  border-color: var(--foreground);
+}
 .event-feed-item {
   display: flex;
   flex-direction: column;
@@ -250,6 +276,76 @@
   background: var(--secondary);
   color: var(--secondary-foreground);
   border: 1px solid var(--border);
+}
+
+/* LLM AI Badge in EventFeed */
+.event-llm-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  letter-spacing: 0.3px;
+  line-height: 1.2;
+}
+
+/* Factor Breakdown in PredictionTable */
+.factor-hint-icon {
+  cursor: help;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  margin-left: 2px;
+}
+.factor-cell {
+  text-align: center;
+}
+.factor-tooltip-trigger {
+  display: inline-flex;
+  gap: 3px;
+  cursor: help;
+}
+.factor-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 700;
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+.factor-dot.pos {
+  background: color-mix(in srgb, var(--up-color) 20%, transparent);
+  color: var(--up-color);
+}
+.factor-dot.neg {
+  background: color-mix(in srgb, var(--down-color) 20%, transparent);
+  color: var(--down-color);
+}
+
+/* LLM / Keyword Badge in Sidebar */
+.llm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #8b5cf6;
+}
+.llm-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #8b5cf6;
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+}
+.keyword-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted-foreground);
 }
 .event-impact-score {
   font-size: 11px;

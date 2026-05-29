@@ -1,5 +1,5 @@
 import React from "react";
-import { AlertCircle, CalendarClock, CheckCircle, Clock3, Database, Radio, Repeat2 } from "lucide-react";
+import { AlertCircle, CalendarClock, CheckCircle, Clock3, Database, Loader2, Play, Radio, Repeat2, Terminal } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -9,7 +9,7 @@ import { usePreferences } from "../preferences";
 
 const TASKS_POLL_MS = 1000;
 
-type TaskStatus = "idle" | "running" | "done" | "error" | "stopped";
+type TaskStatus = "idle" | "running" | "done" | "error" | "stopped" | "unconfigured";
 
 interface HistoryTask {
   id: string;
@@ -92,6 +92,18 @@ export function Tasks() {
   const runningRealtime = payload?.realtime.filter((task) => task.status === "running").length ?? 0;
   const failingTasks = [...(payload?.realtime ?? []), ...(payload?.scheduled ?? [])].filter((task) => task.status === "error").length;
 
+  async function handleTriggerLlm() {
+    try {
+      const res = await fetch("/api/tasks/llm-analysis/trigger", { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "触发失败" }));
+        setError((err as any).error ?? "触发失败");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "触发失败");
+    }
+  }
+
   return (
     <div className="w-full max-w-7xl mx-auto py-2.5 pb-7 flex flex-col gap-3.5 px-4 md:px-0">
       <header className="flex items-end justify-between gap-4.5 pt-1.5 pb-0.5 px-0.5 flex-wrap">
@@ -134,7 +146,14 @@ export function Tasks() {
           description={t("scheduledTasksDescLong")}
         />
         <div className="grid grid-cols-1 gap-2.5 lg:grid-cols-3">
-          {(payload?.scheduled ?? []).map((task) => <TaskCard key={task.id} task={task} />)}
+          {(payload?.scheduled ?? []).map((task) => (
+            <TaskCard
+              key={task.id}
+              task={task}
+              onTrigger={task.id === "llm-analysis" ? handleTriggerLlm : undefined}
+              triggerLabel={task.id === "llm-analysis" ? (preferences.language === "en-US" ? "Run Now" : "立即执行") : undefined}
+            />
+          ))}
         </div>
       </section>
 
@@ -212,52 +231,254 @@ function OverviewMetric({
   );
 }
 
-function TaskCard({ task }: { task: RuntimeTask }) {
+function TaskCard({ task, onTrigger, triggerLabel }: { task: RuntimeTask; onTrigger?: () => void; triggerLabel?: string }) {
   const { t } = useTranslation();
   const preferences = usePreferences();
+  const [triggering, setTriggering] = React.useState(false);
+  const [logDialogOpen, setLogDialogOpen] = React.useState(false);
+  const [llmDetail, setLlmDetail] = React.useState<{
+    logs: string[];
+    progress: { total: number; done: number };
+    lastProcessedCount: number;
+    status: string;
+  } | null>(null);
+
+  // 对 llm-analysis 任务轮询详细状态
+  React.useEffect(() => {
+    if (task.id !== "llm-analysis") return;
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const res = await fetch("/api/tasks/llm-analysis");
+        if (!res.ok) return;
+        const data = await res.json() as typeof llmDetail & { status: string };
+        if (!cancelled) setLlmDetail(data);
+      } catch {
+        // ignore
+      }
+    }
+
+    poll();
+    const id = setInterval(() => { if (!document.hidden) poll(); }, 1500);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [task.id, task.status]);
+
+  async function handleTrigger() {
+    if (!onTrigger || triggering) return;
+    setTriggering(true);
+    try {
+      await onTrigger();
+    } finally {
+      setTriggering(false);
+    }
+  }
+
+  const isLlm = task.id === "llm-analysis";
+  const isRunning = task.status === "running";
+  const hasLogs = llmDetail && llmDetail.logs.length > 0;
+
   return (
-    <Card className={cn(
-      "min-w-0 border bg-card text-card-foreground shadow-sm",
-      task.status === "running" && "border-emerald-500/25",
-      task.status === "error" && "border-destructive/30",
-      task.status === "stopped" && "border-amber-500/25"
-    )}>
-      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 p-3.5">
-        <div className="min-w-0">
-          <CardTitle className="text-sm font-bold text-foreground leading-normal truncate">{task.name}</CardTitle>
-          {task.detail && <CardDescription className="mt-1 text-xs text-muted-foreground line-clamp-1">{task.detail}</CardDescription>}
+    <>
+      <Card className={cn(
+        "min-w-0 border bg-card text-card-foreground shadow-sm",
+        task.status === "running" && "border-emerald-500/25",
+        task.status === "error" && "border-destructive/30",
+        task.status === "stopped" && "border-amber-500/25"
+      )}>
+        <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 p-3.5">
+          <div className="min-w-0">
+            <CardTitle className="text-sm font-bold text-foreground leading-normal truncate">{task.name}</CardTitle>
+            {task.detail && <CardDescription className="mt-1 text-xs text-muted-foreground line-clamp-1">{task.detail}</CardDescription>}
+          </div>
+          <StatusBadge status={task.status} />
+        </CardHeader>
+        <CardContent className="flex flex-col gap-1.5 p-3.5 pt-0">
+          {task.intervalMs !== undefined && <TaskFact label={t("interval")} value={formatInterval(task.intervalMs, preferences.language)} />}
+          <TaskFact label={t("lastSuccess")} value={task.lastSuccessAt ? formatDateTime(task.lastSuccessAt) : "--"} />
+          {task.nextRunAt !== undefined && <TaskFact label={t("nextRun")} value={task.nextRunAt ? formatDateTime(task.nextRunAt) : "--"} />}
+          {task.lastError && <TaskFact label={t("error")} value={task.lastError} />}
+
+          {/* LLM 进度条 */}
+          {isLlm && llmDetail && llmDetail.progress.total > 0 && (
+            <div className="mt-2 flex flex-col gap-1">
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>分析进度</span>
+                <strong className="text-foreground">
+                  {llmDetail.progress.done} / {llmDetail.progress.total} 条
+                </strong>
+              </div>
+              <Progress
+                value={Math.round((llmDetail.progress.done / llmDetail.progress.total) * 100)}
+                className="h-[6px]"
+              />
+            </div>
+          )}
+
+          {isLlm && isRunning && (
+            <button
+              className="mt-2 w-full h-8 text-xs font-semibold rounded-md border border-primary/30 bg-primary/5 hover:bg-primary/10 text-primary transition-colors flex items-center justify-center gap-1.5"
+              onClick={() => setLogDialogOpen(true)}
+            >
+              <Terminal size={13} />
+              查看运行日志
+            </button>
+          )}
+
+          {isLlm && !isRunning && onTrigger && (
+            <button
+              className="mt-2 w-full h-8 text-xs font-semibold rounded-md border border-border bg-background hover:bg-accent hover:text-accent-foreground transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+              disabled={triggering}
+              onClick={handleTrigger}
+            >
+              {triggering ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <Play size={13} />
+              )}
+              {triggerLabel ?? "触发"}
+            </button>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 运行日志弹窗 */}
+      {isLlm && logDialogOpen && llmDetail && (
+        <LogDialog
+          logs={llmDetail.logs}
+          isRunning={isRunning}
+          progress={llmDetail.progress}
+          onClose={() => setLogDialogOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
+/** 运行日志弹窗 */
+function LogDialog({
+  logs,
+  isRunning,
+  progress,
+  onClose
+}: {
+  logs: string[];
+  isRunning: boolean;
+  progress: { total: number; done: number };
+  onClose: () => void;
+}) {
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+
+  // 新日志追加时自动滚到底部
+  React.useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [logs.length]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div
+        className="w-full max-w-2xl max-h-[80vh] mx-4 bg-card border border-border rounded-xl shadow-2xl flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* 弹窗头部 */}
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <div className="flex items-center gap-2">
+            <Terminal size={16} className="text-primary" />
+            <h2 className="text-sm font-bold text-foreground">LLM 分析运行日志</h2>
+            {isRunning && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-emerald-500 font-semibold">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                运行中
+              </span>
+            )}
+          </div>
+          <button
+            className="w-7 h-7 flex items-center justify-center rounded-md border border-border bg-background hover:bg-accent text-muted-foreground hover:text-foreground transition-colors text-sm"
+            onClick={onClose}
+          >
+            ✕
+          </button>
         </div>
-        <StatusBadge status={task.status} />
-      </CardHeader>
-      <CardContent className="flex flex-col gap-1.5 p-3.5 pt-0">
-        {task.intervalMs !== undefined && <TaskFact label={t("interval")} value={formatInterval(task.intervalMs, preferences.language)} />}
-        <TaskFact label={t("lastSuccess")} value={task.lastSuccessAt ? formatDateTime(task.lastSuccessAt) : "--"} />
-        {task.nextRunAt !== undefined && <TaskFact label={t("nextRun")} value={task.nextRunAt ? formatDateTime(task.nextRunAt) : "--"} />}
-        {task.lastError && <TaskFact label={t("error")} value={task.lastError} />}
-      </CardContent>
-    </Card>
+
+        {/* 进度条 */}
+        {progress.total > 0 && (
+          <div className="px-4 pt-3 pb-2 flex flex-col gap-1">
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>分析进度</span>
+              <strong className="text-foreground">{progress.done} / {progress.total} 条</strong>
+            </div>
+            <Progress
+              value={Math.round((progress.done / progress.total) * 100)}
+              className="h-[6px]"
+            />
+          </div>
+        )}
+
+        {/* 日志内容 */}
+        <div
+          ref={scrollRef}
+          className="flex-1 overflow-y-auto p-4 font-mono text-[12px] leading-relaxed bg-background m-3 rounded-lg border border-border max-h-[400px]"
+        >
+          {logs.length === 0 ? (
+            <div className="text-muted-foreground text-center py-8">等待日志...</div>
+          ) : (
+            logs.map((line, i) => (
+              <div key={i} className={cn(
+                "py-0.5",
+                line.includes("失败") && "text-destructive",
+                line.includes("完成") && "text-emerald-500",
+                line.includes("启动") && "text-primary font-semibold"
+              )}>
+                {line}
+              </div>
+            ))
+          )}
+          {isRunning && (
+            <span className="inline-flex items-center gap-1 text-muted-foreground mt-1">
+              <span className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />
+              运行中...
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
 
 function StatusBadge({ status }: { status: TaskStatus }) {
   const { t } = useTranslation();
-  const icon = status === "running"
-    ? <span className="w-1.75 h-1.75 rounded-full bg-emerald-500 mr-1.5 shadow-[0_0_0_3px_rgba(16,185,129,0.14)]" />
-    : status === "error"
-    ? <AlertCircle size={12} className="mr-1" />
-    : status === "stopped"
-      ? <span className="w-1.75 h-1.75 rounded-full bg-amber-500 mr-1.5" />
-    : status === "done"
-      ? <CheckCircle size={12} className="mr-1" />
-      : <span className="w-1.75 h-1.75 rounded-full bg-slate-400 mr-1.5" />;
-  const variant = status === "running" || status === "done"
-    ? "success"
-    : status === "error"
-      ? "destructive"
-      : status === "stopped"
-        ? "warning"
-      : "secondary";
+
+  let icon: React.ReactNode;
+  let variant: "success" | "destructive" | "warning" | "secondary" | "default";
+
+  switch (status) {
+    case "running":
+      icon = <span className="w-1.75 h-1.75 rounded-full bg-emerald-500 mr-1.5 shadow-[0_0_0_3px_rgba(16,185,129,0.14)]" />;
+      variant = "success";
+      break;
+    case "done":
+      icon = <CheckCircle size={12} className="mr-1" />;
+      variant = "default";
+      break;
+    case "error":
+      icon = <AlertCircle size={12} className="mr-1" />;
+      variant = "destructive";
+      break;
+    case "stopped":
+      icon = <span className="w-1.75 h-1.75 rounded-full bg-amber-500 mr-1.5" />;
+      variant = "warning";
+      break;
+    case "unconfigured":
+      icon = <span className="w-1.75 h-1.75 rounded-full bg-slate-400 mr-1.5" />;
+      variant = "secondary";
+      break;
+    default:
+      icon = <span className="w-1.75 h-1.75 rounded-full bg-slate-400 mr-1.5" />;
+      variant = "secondary";
+  }
   return <Badge variant={variant} className="h-5 text-[10px] px-1.5 font-bold uppercase">{icon}{t(`status_${status}`)}</Badge>;
 }
 

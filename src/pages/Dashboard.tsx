@@ -92,10 +92,13 @@ export function Dashboard({ data, range, onRangeChange }: DashboardProps) {
       </section>
 
       {selectedEvent && (
-        <EventDetailSidebar
-          event={selectedEvent}
-          onClose={() => setSelectedEvent(null)}
-        />
+        <>
+          <div className="sidebar-backdrop" onClick={() => setSelectedEvent(null)} />
+          <EventDetailSidebar
+            event={selectedEvent}
+            onClose={() => setSelectedEvent(null)}
+          />
+        </>
       )}
     </div>
   );
