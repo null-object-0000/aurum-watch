@@ -1,7 +1,7 @@
 import React from "react";
 import { createChart, createSeriesMarkers, ColorType, HistogramSeries, LineSeries } from "lightweight-charts";
 import type { CandlePoint, TimeRange } from "../types";
-import { chartTime } from "../utils/format";
+import { chartTickTime, chartTime, chartTooltipTime } from "../utils/format";
 
 interface PriceChartProps {
   candles: CandlePoint[];
@@ -13,6 +13,13 @@ interface PriceChartProps {
 type PriceUnit = "USD" | "CNY";
 
 const TROY_OUNCE_GRAMS = 31.1034768;
+const RANGE_GRANULARITY: Record<TimeRange, string> = {
+  "1H": "1m",
+  "4H": "5m",
+  "1D": "15m",
+  "7D": "2h",
+  "30D": "6h"
+};
 
 export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChartProps) {
   const [unit, setUnit] = React.useState<PriceUnit>("USD");
@@ -39,8 +46,15 @@ export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChart
       height: 230,
       layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#8b96a6", attributionLogo: false },
       grid: { vertLines: { color: "#202a35" }, horzLines: { color: "#202a35" } },
+      localization: { timeFormatter: (time: unknown) => chartTooltipTime(Number(time)) },
       rightPriceScale: { borderColor: "#303a48" },
-      timeScale: { borderColor: "#303a48", visible: true, timeVisible: true, secondsVisible: false }
+      timeScale: {
+        borderColor: "#303a48",
+        visible: true,
+        timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: (time: unknown) => chartTickTime(Number(time), range)
+      }
     });
     const xauLine = priceChart.addSeries(LineSeries, { color: "#d3a72d", lineWidth: 2 });
 
@@ -48,9 +62,16 @@ export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChart
       height: 122,
       layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#8b96a6", attributionLogo: false },
       grid: { vertLines: { color: "#202a35" }, horzLines: { color: "#202a35" } },
+      localization: { timeFormatter: (time: unknown) => chartTooltipTime(Number(time)) },
       rightPriceScale: { visible: false },
       leftPriceScale: { visible: true, borderColor: "#303a48" },
-      timeScale: { borderColor: "#303a48", visible: true, timeVisible: true, secondsVisible: false }
+      timeScale: {
+        borderColor: "#303a48",
+        visible: true,
+        timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: (time: unknown) => chartTickTime(Number(time), range)
+      }
     });
     const bars = sentimentChart.addSeries(HistogramSeries, { priceScaleId: "left", priceFormat: { type: "volume" } });
 
@@ -76,7 +97,7 @@ export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChart
       sentimentChart.remove();
       chartInstancesRef.current = null;
     };
-  }, []);
+  }, [range]);
 
   React.useEffect(() => {
     const instances = chartInstancesRef.current;
@@ -104,16 +125,20 @@ export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChart
       }
     }
 
+    const rootStyles = getComputedStyle(document.documentElement);
+    const upColor = rootStyles.getPropertyValue("--up-color").trim() || "#d94b55";
+    const downColor = rootStyles.getPropertyValue("--down-color").trim() || "#31b978";
+
     const barsData = visibleCandles.map((c) => ({
       time: chartTime(c.time),
       value: c.sentiment,
-      color: c.sentiment > 0 ? "#d94b55" : c.sentiment < 0 ? "#31b978" : "#6d7683"
+      color: c.sentiment > 0 ? upColor : c.sentiment < 0 ? downColor : "#6d7683"
     }));
     bars.setData(barsData);
 
     priceChart.timeScale().fitContent();
     sentimentChart.timeScale().fitContent();
-  }, [visibleCandles, unit, fxRate, showAuLine]);
+  }, [visibleCandles, unit, fxRate, showAuLine, range]);
 
   if (!candles.length) return <div className="empty-state">OANDA 蜡烛数据不可用，配置 token 后显示走势。</div>;
 
@@ -124,6 +149,7 @@ export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChart
           <span><i className="legend-xau" />{xauLabel}</span>
           {showAuLine && <span><i className="legend-au" />AU9999（元/克）</span>}
           <span><i className="legend-event" />事件标记</span>
+          <span className="chart-granularity">粒度 {RANGE_GRANULARITY[range]} · 本地时区</span>
         </div>
         <div className="chart-controls">
           {(["1H", "4H", "1D", "7D", "30D"] as TimeRange[]).map((item) => (

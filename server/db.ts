@@ -73,6 +73,10 @@ export function getAllQuotesFromDb(): Quote[] {
   }
 }
 
+export function getEventsCount(): number {
+  return (db.prepare(`SELECT COUNT(*) as cnt FROM events`).get() as { cnt: number }).cnt;
+}
+
 export function saveQuotes(quotes: Quote[]) {
   db.exec("BEGIN");
   try {
@@ -229,16 +233,18 @@ export function aggregateTicksToMinute(minuteTime: string) {
 export function getAggregatedCandles(
   symbol: string,
   afterTime: string,
-  intervalSeconds: number
+  intervalSeconds: number,
+  timezoneOffsetMinutes = 0
 ): Array<{ time: string; price: number }> {
+  const offsetSeconds = timezoneOffsetMinutes * 60;
   // SQLite 没有 DATE_TRUNC，用整数运算来做时间槽对齐
-  // strftime('%s', time) 返回 Unix 秒数，整除 intervalSeconds 再乘回来得到槽起始时间
+  // strftime('%s', time) 返回 Unix 秒数；先换算到用户本地时间轴分桶，再换回 UTC 槽起始。
   const rows = db
     .prepare(
       `
       SELECT
         datetime(
-          (CAST(strftime('%s', time) AS INTEGER) / @interval) * @interval,
+          ((CAST(strftime('%s', time) AS INTEGER) - @offsetSeconds) / @interval) * @interval + @offsetSeconds,
           'unixepoch'
         ) AS slot,
         AVG(price) AS price
@@ -248,7 +254,7 @@ export function getAggregatedCandles(
       ORDER BY slot ASC
     `
     )
-    .all({ symbol, afterTime, interval: intervalSeconds }) as Array<{ slot: string; price: number }>;
+    .all({ symbol, afterTime, interval: intervalSeconds, offsetSeconds }) as Array<{ slot: string; price: number }>;
 
   return rows.map((r) => ({ time: new Date(r.slot + "Z").toISOString(), price: r.price }));
 }
@@ -392,15 +398,8 @@ export function getInitStatus(): {
     // ignore
   }
 
-  // 判断"已初始化"：
-  // - history_minutes 有至少 7 天历史数据，OR
-  // - history_minutes 数据不足但 quotes 表有数据（说明系统已运行，只是历史落库还在积累）
-  //   此时允许进入看板，只是历史图表数据有限
-  const hasHistoryMinutes = historyMinutesCount > 0;
-  const hasQuotes = quotesCount > 0;
-  const hasEnoughHistory = historyDays >= 7;
-
-  const initialized = hasEnoughHistory || (hasQuotes && hasHistoryMinutes);
+  const hasEnoughHistory = historyDays >= 7 && historyMinutesCount >= 7 * 24 * 60 * 0.4;
+  const initialized = hasEnoughHistory;
 
   return {
     initialized,

@@ -2,6 +2,7 @@ import React from "react";
 import { Settings } from "lucide-react";
 import { formatClock } from "../utils/format";
 import type { DashboardPayload } from "../types";
+import { usePreferences } from "../preferences";
 
 interface TopbarProps {
   data: DashboardPayload | null;
@@ -12,6 +13,7 @@ interface TopbarProps {
 
 export function Topbar({ data, activeTab, initialized, onTabChange }: TopbarProps) {
   const [now, setNow] = React.useState(() => new Date());
+  const { t } = usePreferences();
 
   React.useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
@@ -26,7 +28,7 @@ export function Topbar({ data, activeTab, initialized, onTabChange }: TopbarProp
         <img src="/icon.svg" alt="" />
         <div>
           <strong>金哨 Aurum Watch</strong>
-          <span>舆情洞察 · 影响预测</span>
+          <span>{t("brandSubtitle")}</span>
         </div>
       </div>
       <div className="topbar-right">
@@ -35,10 +37,10 @@ export function Topbar({ data, activeTab, initialized, onTabChange }: TopbarProp
         <button
           id="settings-btn"
           className={`settings-btn${isSettings ? " active" : ""}`}
-          title={isSettings ? "返回看板" : "系统设置"}
+          title={isSettings ? t("dashboard") : t("settings")}
           disabled={!initialized}
           onClick={() => onTabChange(isSettings ? "dashboard" : "settings")}
-          aria-label="设置"
+          aria-label={t("settings")}
         >
           <Settings size={16} className="settings-icon" />
         </button>

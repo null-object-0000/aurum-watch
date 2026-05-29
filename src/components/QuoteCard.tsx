@@ -96,7 +96,7 @@ function MiniSpark({ values, down }: { values: number[]; down: boolean }) {
 
   return (
     <svg className="spark" viewBox="0 0 100 50" preserveAspectRatio="none">
-      <polyline points={points.join(" ")} fill="none" stroke={down ? "#31b978" : "#d94b55"} strokeWidth="2" />
+      <polyline points={points.join(" ")} fill="none" stroke={down ? "var(--down-color)" : "var(--up-color)"} strokeWidth="2" />
     </svg>
   );
 }

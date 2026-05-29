@@ -14,8 +14,8 @@
 .event-feed small, .event-feed time { color: #8d98a8; }
 .event-feed em { font-style: normal; background: #202b38; color: #b8c6d8; border-radius: 5px; padding: 3px 7px; font-size: 12px; }
 .event-dot { width: 8px; height: 8px; border-radius: 50%; background: #8994a3; }
-.event-dot.bullish { background: #d94b55; }
-.event-dot.bearish { background: #2fac74; }
+.event-dot.bullish { background: var(--up-color); }
+.event-dot.bearish { background: var(--down-color); }
 
 .signal h3 { font-size: 23px; margin: 12px 0; }
 .signal p { color: #c4ccd7; line-height: 1.7; }

@@ -223,20 +223,16 @@ export async function fetchOandaCandlesForDay(
   instrument: "XAU_USD" | "USD_CNH",
   date: string // "YYYY-MM-DD"
 ): Promise<OandaCandle[]> {
-  if (!config.oandaToken) return [];
+  if (!config.oandaToken) throw new Error("OANDA token missing");
 
   const from = encodeURIComponent(`${date}T00:00:00Z`);
   const to = encodeURIComponent(`${date}T23:59:59Z`);
   const url = `${oandaBaseUrl}/v3/instruments/${instrument}/candles?granularity=M1&from=${from}&to=${to}&price=M`;
 
-  try {
-    const response = await fetch(url, { headers: headers() });
-    if (response.status === 404 || response.status === 422) return []; // weekend / holiday
-    if (!response.ok) throw new Error(`OANDA ${instrument} candles for day ${date}: ${response.status}`);
-    const json = (await response.json()) as { candles?: OandaCandle[] };
-    return (json.candles ?? []).filter((c) => c.complete);
-  } catch {
-    return [];
-  }
+  const response = await fetch(url, { headers: headers() });
+  if (response.status === 404 || response.status === 422) return []; // weekend / holiday
+  if (!response.ok) throw new Error(`OANDA ${instrument} candles for day ${date}: ${response.status}`);
+  const json = (await response.json()) as { candles?: OandaCandle[] };
+  return (json.candles ?? []).filter((c) => c.complete);
 }
 

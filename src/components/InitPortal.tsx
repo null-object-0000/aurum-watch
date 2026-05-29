@@ -119,8 +119,12 @@ export function InitPortal({ status, onDone, onStatusRefresh }: InitPortalProps)
     },
     {
       label: "AKTools SGE",
-      ok: status.au9999Configured,
-      hint: status.au9999Configured ? "已配置" : "未配置 — 国内金价将跳过"
+      ok: Boolean(status.au9999Configured && status.au9999Reachable),
+      hint: !status.au9999Configured
+        ? "未配置 — 国内金价将跳过"
+        : status.au9999Reachable
+          ? `可用${status.aktoolsVersion ? ` · ${status.aktoolsVersion}` : ""}`
+          : `不可用${status.aktoolsError ? ` · ${status.aktoolsError}` : ""}`
     },
     { label: "GDELT 新闻源", ok: true, hint: "公开免费，无需配置" }
   ];

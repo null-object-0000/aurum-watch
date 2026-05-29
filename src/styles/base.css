@@ -3,13 +3,27 @@
   font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   background: #080b10;
   color: #d8dee7;
+  --up-color: #d94b55;
+  --down-color: #31b978;
+}
+
+:root[data-market-colors="green-up"] {
+  --up-color: #31b978;
+  --down-color: #d94b55;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  background: #eef2f7;
+  color: #172033;
 }
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; background: #080b10; }
+:root[data-theme="light"] body { background: #eef2f7; color: #172033; }
 button, input { font: inherit; }
 button { cursor: pointer; }
 
-.green { color: #31b978 !important; }
-.red { color: #d94b55 !important; }
+.green { color: var(--down-color) !important; }
+.red { color: var(--up-color) !important; }
 .empty-state, .loading { min-height: 180px; display: grid; place-items: center; color: #7e8998; text-align: center; }

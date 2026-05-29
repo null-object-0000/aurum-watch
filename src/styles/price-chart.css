@@ -6,6 +6,7 @@
 .chart-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; color: #b9c2cf; font-size: 13px; }
 .chart-legend span { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .chart-legend i { width: 14px; height: 4px; border-radius: 999px; display: inline-block; }
+.chart-legend .chart-granularity { color: #7f8a99; font-size: 12px; font-weight: 650; }
 .legend-xau { background: #d3a72d; }
 .legend-au { background: #328bd8; }
 .legend-event { background: #8c5bd6; }

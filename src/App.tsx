@@ -17,12 +17,6 @@ function navigateTo(to: "dashboard" | "settings") {
   window.location.hash = to === "settings" ? "#/settings" : "#/";
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────
-
-const RANGE_DURATION: Record<TimeRange, number> = {
-  "1H": 60, "4H": 300, "1D": 900, "7D": 3600, "30D": 14400
-};
-
 export interface InitStatus {
   initialized: boolean;
   historyDays: number;
@@ -31,6 +25,9 @@ export interface InitStatus {
   eventsCount: number;
   oandaConfigured: boolean;
   au9999Configured: boolean;
+  au9999Reachable?: boolean;
+  aktoolsVersion?: string | null;
+  aktoolsError?: string | null;
   dbSizeBytes: number;
 }
 
@@ -44,6 +41,13 @@ export function App() {
   const [initStatus, setInitStatus] = React.useState<InitStatus | null>(null);
 
   React.useEffect(() => { rangeRef.current = range; }, [range]);
+
+  const loadDashboard = React.useCallback(async () => {
+    const tzOffset = new Date().getTimezoneOffset();
+    const dashboard = await fetch("/api/dashboard").then((r) => r.json());
+    const candles = await fetch(`/api/candles?range=${rangeRef.current}&tzOffset=${tzOffset}`).then((r) => r.json());
+    setData({ ...dashboard, candles });
+  }, []);
 
   // ── Hash routing ──────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -75,16 +79,14 @@ export function App() {
   // ── Dashboard data ────────────────────────────────────────────────────
   React.useEffect(() => {
     if ((route === "dashboard") && !data) {
-      fetch("/api/dashboard")
-        .then((r) => r.json())
-        .then(setData)
-        .catch(console.error);
+      loadDashboard().catch(console.error);
     }
-  }, [route]);
+  }, [route, data, loadDashboard]);
 
   React.useEffect(() => {
     if (!data) return;
-    fetch(`/api/candles?range=${range}`)
+    const tzOffset = new Date().getTimezoneOffset();
+    fetch(`/api/candles?range=${range}&tzOffset=${tzOffset}`)
       .then((r) => r.json())
       .then((candles) => setData((prev) => (prev ? { ...prev, candles } : null)))
       .catch(console.error);
@@ -97,58 +99,14 @@ export function App() {
       try {
         const message = JSON.parse(event.data);
         if (message.type === "update") {
-          setData((prev) => {
-            if (!prev) return null;
-            const quotes = message.payload.quotes;
-            const xauQuote = quotes.find((q: any) => q.symbol === "XAU_USD");
-            const auQuote  = quotes.find((q: any) => q.symbol === "AU9999");
-            const latestXau = xauQuote?.value ?? null;
-            const latestAu  = auQuote?.value  ?? null;
-            const latestSentiment = message.payload.sentiment?.score ?? 0;
-
-            const activeRange = rangeRef.current;
-            const duration = RANGE_DURATION[activeRange];
-            const time = new Date(message.payload.updatedAt || Date.now()).getTime() / 1000;
-            const candleTimeSec = Math.floor(time / duration) * duration;
-            const candleTimeISO = new Date(candleTimeSec * 1000).toISOString();
-
-            let updatedCandles = prev.candles;
-            const last = prev.candles[prev.candles.length - 1];
-
-            if (last) {
-              const lastSec = Math.floor(new Date(last.time).getTime() / 1000);
-              if (candleTimeSec === lastSec) {
-                updatedCandles = [...prev.candles.slice(0, -1),
-                  { ...last, xauUsd: latestXau ?? last.xauUsd, au9999: latestAu ?? last.au9999, sentiment: latestSentiment }];
-              } else if (candleTimeSec > lastSec) {
-                const count = { "1H": 60, "4H": 48, "1D": 96, "7D": 168, "30D": 180 }[activeRange];
-                updatedCandles = [...prev.candles,
-                  { time: candleTimeISO, xauUsd: latestXau, au9999: latestAu, sentiment: latestSentiment }
-                ].slice(-count);
-              } else {
-                updatedCandles = [...prev.candles.slice(0, -1),
-                  { ...last, xauUsd: latestXau ?? last.xauUsd, au9999: latestAu ?? last.au9999, sentiment: latestSentiment }];
-              }
-            } else {
-              updatedCandles = [{ time: candleTimeISO, xauUsd: latestXau, au9999: latestAu, sentiment: latestSentiment }];
-            }
-
-            return {
-              ...prev,
-              quotes: message.payload.quotes,
-              candles: updatedCandles,
-              sentiment: message.payload.sentiment,
-              sources: message.payload.sources,
-              updatedAt: message.payload.updatedAt
-            };
-          });
+          loadDashboard().catch(console.error);
         }
       } catch (err) {
         console.error("SSE parse error:", err);
       }
     };
     return () => eventSource.close();
-  }, []);
+  }, [loadDashboard]);
 
   // ── Navigation ────────────────────────────────────────────────────────
   function handleTabChange(to: "dashboard" | "settings") {
@@ -160,8 +118,8 @@ export function App() {
     setInitStatus((prev) => prev ? { ...prev, initialized: true } : null);
     setRoute("dashboard");
     navigateTo("dashboard");
-    fetch("/api/dashboard").then((r) => r.json()).then(setData).catch(console.error);
-  }, []);
+    loadDashboard().catch(console.error);
+  }, [loadDashboard]);
 
   const refreshInitStatus = React.useCallback(() => {
     fetch("/api/init-status")

@@ -5,7 +5,7 @@ dotenv.config();
 export const config = {
   port: Number(process.env.PORT ?? 8787),
   databasePath: process.env.DATABASE_PATH ?? "./data/aurum-watch.sqlite",
-  refreshIntervalMs: Number(process.env.REFRESH_INTERVAL_MS ?? 1000),
+  refreshIntervalMs: Number(process.env.REFRESH_INTERVAL_MS ?? 30000),
   oandaToken: process.env.OANDA_API_TOKEN ?? "",
   oandaEnv: process.env.OANDA_ENV === "live" ? "live" : "practice",
   aktoolsBaseUrl: process.env.AKTOOLS_BASE_URL ?? "",

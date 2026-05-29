@@ -24,15 +24,14 @@ import {
   deleteEventFromDb,
   deleteQuoteFromDb,
   getAllEventsFromDb,
+  getAllQuotesFromDb,
   getDatasetStats,
   getInitStatus,
   exportAllData,
   importAllData,
-  getHistoryMinutesRange,
-  getHistoryMinutesCount,
-  getHistoryDays,
   getDailyCoverage,
-  getMonthlyCoverage
+  getMonthlyCoverage,
+  getEventsCount
 } from "./db.js";
 import { fetchAu9999 } from "./providers/au9999.js";
 import { fetchNewsEvents } from "./providers/news.js";
@@ -64,6 +63,10 @@ interface SyncJob {
 
 let currentSyncJob: SyncJob | null = null;
 
+function isSyncRunning() {
+  return currentSyncJob?.status === "running";
+}
+
 // ─── App Setup ────────────────────────────────────────────────────────────
 
 const app = Fastify({ logger: true });
@@ -84,50 +87,61 @@ if (existsSync(distDir)) {
 
 app.get("/api/health", async () => ({ ok: true, updatedAt: latest?.updatedAt ?? null }));
 
-app.get("/api/dashboard", async () => latest ?? (await refresh()));
+app.get("/api/dashboard", async () => latest ?? (await buildDashboardSnapshot()));
 
-app.get("/api/init-status", async () => getInitStatus());
+app.get("/api/init-status", async () => {
+  const aktools = await checkAktoolsHealth();
+  return { ...getInitStatus(), au9999Reachable: aktools.reachable, aktoolsVersion: aktools.version, aktoolsError: aktools.error };
+});
 
-app.get("/api/settings", async () => ({
-  oanda: { configured: Boolean(config.oandaToken), env: config.oandaEnv },
-  au9999: { configured: Boolean(config.aktoolsBaseUrl), provider: "AKTools" },
-  news: { provider: "GDELT", query: config.newsQuery },
-  storage: { databasePath: config.databasePath }
-}));
+app.get("/api/settings", async () => {
+  const aktools = await checkAktoolsHealth();
+  return {
+    oanda: { configured: Boolean(config.oandaToken), env: config.oandaEnv },
+    au9999: { configured: Boolean(config.aktoolsBaseUrl), provider: "AKTools", ...aktools },
+    news: { provider: "GDELT", query: config.newsQuery },
+    storage: { databasePath: config.databasePath }
+  };
+});
 
 // ─── Candles ──────────────────────────────────────────────────────────────
 
 const RANGE_CONFIG = {
-  "1H":  { intervalSeconds: 60,    lookbackHours: 1   },
-  "4H":  { intervalSeconds: 300,   lookbackHours: 4   },
-  "1D":  { intervalSeconds: 900,   lookbackHours: 24  },
-  "7D":  { intervalSeconds: 3600,  lookbackHours: 168 },
-  "30D": { intervalSeconds: 14400, lookbackHours: 720 }
+  "1H":  { intervalSeconds: 60,     lookbackHours: 1   },
+  "4H":  { intervalSeconds: 300,    lookbackHours: 4   },
+  "1D":  { intervalSeconds: 900,    lookbackHours: 24  },
+  "7D":  { intervalSeconds: 7200,   lookbackHours: 168 },
+  "30D": { intervalSeconds: 21600,  lookbackHours: 720 }
 } as const;
 
 app.get("/api/candles", async (request, reply) => {
-  const query = request.query as { range?: string };
+  const query = request.query as { range?: string; tzOffset?: string };
   const range = (query.range ?? "1D") as keyof typeof RANGE_CONFIG;
   if (!Object.keys(RANGE_CONFIG).includes(range)) {
     reply.status(400).send({ error: "Invalid range parameter" });
     return;
   }
+  const timezoneOffsetMinutes = Number(query.tzOffset ?? 0);
+  if (!Number.isFinite(timezoneOffsetMinutes) || Math.abs(timezoneOffsetMinutes) > 14 * 60) {
+    reply.status(400).send({ error: "Invalid timezone offset" });
+    return;
+  }
   try {
-    return await buildCandles(range);
+    return await buildCandles(range, timezoneOffsetMinutes);
   } catch (error) {
     app.log.error(error);
     reply.status(500).send({ error: error instanceof Error ? error.message : "Failed to fetch candles" });
   }
 });
 
-async function buildCandles(range: keyof typeof RANGE_CONFIG): Promise<CandlePoint[]> {
+async function buildCandles(range: keyof typeof RANGE_CONFIG, timezoneOffsetMinutes = 0): Promise<CandlePoint[]> {
   const { intervalSeconds, lookbackHours } = RANGE_CONFIG[range];
   const afterTime = new Date(Date.now() - lookbackHours * 3600_000).toISOString();
   const oneHourAgo = new Date(Date.now() - 3600_000).toISOString();
 
   const [xauHistory, au9999History] = await Promise.all([
-    getAggregatedCandles("XAU_USD", afterTime, intervalSeconds),
-    getAggregatedCandles("AU9999", afterTime, intervalSeconds)
+    getAggregatedCandles("XAU_USD", afterTime, intervalSeconds, timezoneOffsetMinutes),
+    getAggregatedCandles("AU9999", afterTime, intervalSeconds, timezoneOffsetMinutes)
   ]);
 
   const timeMap = new Map<string, CandlePoint>();
@@ -190,10 +204,6 @@ function broadcast(type: string, payload: unknown) {
 function broadcastUpdate() {
   if (!latest) return;
   broadcast("update", {
-    quotes: latest.quotes,
-    liveCandle: latest.candles[latest.candles.length - 1] ?? null,
-    sentiment: latest.sentiment,
-    sources: latest.sources,
     updatedAt: latest.updatedAt
   });
 }
@@ -244,11 +254,15 @@ app.get("/api/settings/data/coverage", async (request, reply) => {
 // ── Manual fetch / clear ──────────────────────────────────────────────────
 
 app.post("/api/settings/data/fetch", async (request, reply) => {
+  if (isSyncRunning()) {
+    reply.status(409).send({ error: "已有同步任务正在运行，请稍后再试" });
+    return;
+  }
   const body = request.body as { datasetId?: string };
   const datasetId = body?.datasetId ?? "all";
   try {
     await fetchAndSyncDataset(datasetId);
-    await refresh();
+    await refreshLiveData();
     return { ok: true, datasetId };
   } catch (error) {
     reply.status(500).send({ error: error instanceof Error ? error.message : "Fetch failed" });
@@ -256,6 +270,10 @@ app.post("/api/settings/data/fetch", async (request, reply) => {
 });
 
 app.post("/api/settings/data/clear", async (request, reply) => {
+  if (isSyncRunning()) {
+    reply.status(409).send({ error: "已有同步任务正在运行，请稍后再试" });
+    return;
+  }
   const body = request.body as { datasetId?: string };
   const datasetId = body?.datasetId ?? "all";
   try {
@@ -273,7 +291,7 @@ app.post("/api/settings/data/clear", async (request, reply) => {
         reply.status(400).send({ error: "Invalid datasetId" });
         return;
     }
-    await refresh();
+    await refreshLiveData();
     return { ok: true, datasetId };
   } catch (error) {
     reply.status(500).send({ error: error instanceof Error ? error.message : "Clear failed" });
@@ -294,8 +312,9 @@ app.post("/api/settings/data/sync-range", async (request, reply) => {
     endDate: string;   // "YYYY-MM-DD"
   };
 
-  if (!body?.startDate || !body?.endDate) {
-    reply.status(400).send({ error: "Missing startDate or endDate" });
+  const validation = validateSyncRequest(body);
+  if (!validation.ok) {
+    reply.status(400).send({ error: validation.error });
     return;
   }
   if (currentSyncJob?.status === "running") {
@@ -303,10 +322,11 @@ app.post("/api/settings/data/sync-range", async (request, reply) => {
     return;
   }
 
+  const datasetId = body.datasetId ?? "all";
   const days = buildDateRange(body.startDate, body.endDate);
   currentSyncJob = {
     status: "running",
-    datasetId: body.datasetId ?? "all",
+    datasetId,
     startDate: body.startDate,
     endDate: body.endDate,
     totalDays: days.length,
@@ -319,7 +339,7 @@ app.post("/api/settings/data/sync-range", async (request, reply) => {
   // Return immediately — run sync in background
   reply.send({ ok: true, totalDays: days.length });
 
-  runDateRangeSync(body.datasetId ?? "all", days).catch((err) => {
+  runDateRangeSync(datasetId, days).catch((err) => {
     if (currentSyncJob) {
       currentSyncJob.status = "error";
       currentSyncJob.error = err instanceof Error ? err.message : "Unknown error";
@@ -337,16 +357,23 @@ async function runDateRangeSync(datasetId: string, days: string[]) {
 
     const rows: Array<{ symbol: string; price: number; time: string }> = [];
 
-    if (datasetId === "XAU_USD" || datasetId === "all") {
-      const candles = await fetchOandaCandlesForDay("XAU_USD", day);
-      for (const c of candles) {
-        rows.push({ symbol: "XAU_USD", price: Number(c.mid.c), time: c.time });
-      }
-    }
-    if (datasetId === "USD_CNH" || datasetId === "all") {
-      const candles = await fetchOandaCandlesForDay("USD_CNH", day);
-      for (const c of candles) {
-        rows.push({ symbol: "USD_CNH", price: Number(c.mid.c), time: c.time });
+    const symbols: Array<"XAU_USD" | "USD_CNH"> =
+      datasetId === "all"
+        ? ["XAU_USD", "USD_CNH"]
+        : datasetId === "XAU_USD" || datasetId === "USD_CNH"
+          ? [datasetId]
+          : [];
+
+    const results = await Promise.all(
+      symbols.map(async (symbol) => ({
+        symbol,
+        candles: await fetchOandaCandlesForDay(symbol, day)
+      }))
+    );
+
+    for (const result of results) {
+      for (const candle of result.candles) {
+        rows.push({ symbol: result.symbol, price: Number(candle.mid.c), time: candle.time });
       }
     }
 
@@ -363,8 +390,9 @@ async function runDateRangeSync(datasetId: string, days: string[]) {
   currentSyncJob.currentDay = null;
   broadcast("sync-progress", { ...currentSyncJob });
 
-  // Rebuild dashboard after sync
-  await refresh();
+  // Rebuild dashboard from the database after sync.
+  latest = await buildDashboardSnapshot();
+  broadcastUpdate();
 }
 
 // ── Supplement ────────────────────────────────────────────────────────────
@@ -411,7 +439,7 @@ app.post("/api/settings/data/supplement", async (request, reply) => {
       return;
     }
 
-    await refresh();
+    await refreshLiveData();
     return { ok: true };
   } catch (error) {
     reply.status(500).send({ error: error instanceof Error ? error.message : "Supplement failed" });
@@ -422,7 +450,7 @@ app.delete("/api/settings/data/events/:id", async (request, reply) => {
   const { id } = request.params as { id: string };
   try {
     deleteEventFromDb(id);
-    await refresh();
+    await refreshLiveData();
     return { ok: true, id };
   } catch (error) {
     reply.status(500).send({ error: error instanceof Error ? error.message : "Delete failed" });
@@ -437,10 +465,14 @@ app.get("/api/settings/data/export", async (_request, reply) => {
 });
 
 app.post("/api/settings/data/import", async (request, reply) => {
+  if (isSyncRunning()) {
+    reply.status(409).send({ error: "已有同步任务正在运行，请稍后再试" });
+    return;
+  }
   const body = request.body as Parameters<typeof importAllData>[0];
   try {
     importAllData(body);
-    await refresh();
+    await refreshLiveData();
     return { ok: true };
   } catch (error) {
     reply.status(500).send({ error: error instanceof Error ? error.message : "Import failed" });
@@ -454,7 +486,7 @@ app.post("/api/init/sync", async (_request, reply) => {
     const [oanda, au9999, news] = await Promise.all([fetchOandaQuotes(), fetchAu9999(), fetchNewsEvents()]);
     saveQuotes(derivedQuotes([...oanda.quotes, au9999]));
     saveEvents(news.events);
-    await refresh();
+      await refreshLiveData();
     return { ok: true, initialized: true };
   } catch (error) {
     reply.status(500).send({ error: error instanceof Error ? error.message : "Sync failed" });
@@ -505,28 +537,7 @@ const server = await app.listen({ port: config.port, host: "0.0.0.0" });
 app.log.info(`Aurum Watch API listening on ${server}`);
 
 // Initial refresh
-await refresh();
-
-// Auto background sync if history_minutes is empty and OANDA configured
-const { historyMinutesCount } = getInitStatus();
-if (historyMinutesCount === 0 && config.oandaToken) {
-  app.log.info("history_minutes empty — starting background 90-day sync...");
-  const endDate = toDateStr(new Date());
-  const startDate = toDateStr(new Date(Date.now() - 90 * 86_400_000));
-  const days = buildDateRange(startDate, endDate);
-  currentSyncJob = {
-    status: "running",
-    datasetId: "all",
-    startDate,
-    endDate,
-    totalDays: days.length,
-    completedDays: 0,
-    currentDay: null,
-    error: null,
-    startedAt: new Date().toISOString()
-  };
-  runDateRangeSync("all", days).catch((err) => app.log.error("Auto sync failed:", err));
-}
+await refreshLiveData();
 
 // Per-second tick timer
 setInterval(() => {
@@ -535,7 +546,7 @@ setInterval(() => {
 
 // Full refresh every N seconds (quotes + news)
 setInterval(() => {
-  refresh().catch((err) => app.log.error(err));
+  refreshLiveData().catch((err) => app.log.error(err));
 }, config.refreshIntervalMs);
 
 // ─── Refresh Logic ────────────────────────────────────────────────────────
@@ -543,8 +554,10 @@ setInterval(() => {
 async function tickRefresh() {
   const [oanda, au9999] = await Promise.all([fetchOandaQuotes(), fetchAu9999()]);
   const now = new Date().toISOString();
+  const quotes = derivedQuotes([...oanda.quotes, au9999]);
+  saveQuotes(quotes);
 
-  for (const q of [...oanda.quotes, au9999]) {
+  for (const q of quotes) {
     if (q.value !== null && ["XAU_USD", "AU9999", "USD_CNH"].includes(q.symbol)) {
       saveTick(q.symbol, q.value, now);
     }
@@ -558,14 +571,11 @@ async function tickRefresh() {
     lastMinute = currentMinute;
   }
 
-  if (latest) {
-    const quotes = derivedQuotes([...oanda.quotes, au9999]);
-    latest = { ...latest, quotes, updatedAt: now };
-    broadcastUpdate();
-  }
+  latest = await buildDashboardSnapshot();
+  broadcastUpdate();
 }
 
-async function refresh() {
+async function refreshLiveData() {
   const [oanda, au9999, news] = await Promise.all([fetchOandaQuotes(), fetchAu9999(), fetchNewsEvents()]);
   const quotes = derivedQuotes([...oanda.quotes, au9999]);
   saveQuotes(quotes);
@@ -577,27 +587,123 @@ async function refresh() {
     }
   }
 
-  const candles = await buildCandles("1D").catch(() => []);
-
-  latest = buildDashboard({
-    quotes,
-    candles,
-    events: news.events,
-    sources: [
-      { name: "XAU/USD",   status: oanda.status,  detail: oanda.detail },
-      { name: "USD/CNH",   status: oanda.status,  detail: oanda.detail },
-      { name: "AU9999",    status: au9999.status,  detail: au9999.error ?? au9999.source },
-      { name: "News",      status: news.status,    detail: news.detail },
-      { name: "Database",  status: "ok",           detail: config.databasePath }
-    ],
-    updatedAt: new Date().toISOString()
+  latest = await buildDashboardSnapshot({
+    oandaDetail: oanda.detail,
+    newsDetail: news.detail,
+    newsStatus: news.status
   });
-
   broadcastUpdate();
   return latest;
 }
 
+async function buildDashboardSnapshot(options?: { oandaDetail?: string; newsDetail?: string; newsStatus?: Quote["status"] }) {
+  const quotes = getAllQuotesFromDb();
+  const events = getAllEventsFromDb();
+  const candles = await buildCandles("1D").catch(() => []);
+  const xau = quotes.find((q) => q.symbol === "XAU_USD");
+  const cnh = quotes.find((q) => q.symbol === "USD_CNH");
+  const au = quotes.find((q) => q.symbol === "AU9999");
+  const newsCount = getEventsCount();
+
+  latest = buildDashboard({
+    quotes,
+    candles,
+    events,
+    sources: [
+      sourceFromQuote("XAU/USD", xau, options?.oandaDetail ?? xau?.source ?? "OANDA"),
+      sourceFromQuote("USD/CNH", cnh, options?.oandaDetail ?? cnh?.source ?? "OANDA"),
+      sourceFromQuote("AU9999", au, au?.error ?? au?.source ?? "AKTools/SGE"),
+      { name: "News", status: options?.newsStatus ?? (newsCount > 0 ? "ok" : "stale"), detail: options?.newsDetail ?? `${newsCount} cached events` },
+      { name: "Database", status: "ok", detail: config.databasePath }
+    ],
+    updatedAt: new Date().toISOString()
+  });
+  return latest;
+}
+
+function sourceFromQuote(name: string, quote: Quote | undefined, detail: string) {
+  return {
+    name,
+    status: quote?.status ?? "unconfigured",
+    detail: quote?.error ?? detail
+  };
+}
+
 // ─── Utility Functions ────────────────────────────────────────────────────
+
+function validateSyncRequest(body: {
+  datasetId?: string;
+  startDate?: string;
+  endDate?: string;
+}): { ok: true } | { ok: false; error: string } {
+  if (!body?.startDate || !body?.endDate) return { ok: false, error: "Missing startDate or endDate" };
+  if (!["all", "XAU_USD", "USD_CNH"].includes(body.datasetId ?? "all")) {
+    return { ok: false, error: "Invalid datasetId" };
+  }
+  if (!isDateOnly(body.startDate) || !isDateOnly(body.endDate)) {
+    return { ok: false, error: "日期格式必须为 YYYY-MM-DD" };
+  }
+  const start = new Date(`${body.startDate}T00:00:00Z`);
+  const end = new Date(`${body.endDate}T00:00:00Z`);
+  const today = new Date(`${toDateStr(new Date())}T00:00:00Z`);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+    return { ok: false, error: "日期无效" };
+  }
+  if (start > end) return { ok: false, error: "开始日期不能晚于结束日期" };
+  if (end > today) return { ok: false, error: "结束日期不能晚于今天" };
+  const days = Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1;
+  if (days < 1 || days > 365) return { ok: false, error: "同步范围必须在 1 到 365 天之间" };
+  return { ok: true };
+}
+
+function isDateOnly(value: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+async function checkAktoolsHealth(): Promise<{ reachable: boolean; version: string | null; error: string | null }> {
+  if (!config.aktoolsBaseUrl) return { reachable: false, version: null, error: "AKTOOLS_BASE_URL is not configured" };
+  try {
+    const url = new URL("/version", normalizedBaseUrl(config.aktoolsBaseUrl));
+    const response = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(`AKTools version ${response.status}`);
+    const text = await response.text();
+    const payload = parseMaybeJson(text);
+    const version = extractVersion(payload);
+    return { reachable: true, version, error: null };
+  } catch (error) {
+    return {
+      reachable: false,
+      version: null,
+      error: error instanceof Error ? error.message : "AKTools version check failed"
+    };
+  }
+}
+
+function extractVersion(payload: unknown): string | null {
+  if (typeof payload === "string") return payload;
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as Record<string, unknown>;
+  const aktools = record.at_current_version ?? record.aktools ?? record.aktools_version ?? record.version;
+  const akshare = record.ak_current_version ?? record.akshare ?? record.akshare_version;
+  if (typeof aktools === "string" && typeof akshare === "string") {
+    return `AKTools ${aktools} / AKShare ${akshare}`;
+  }
+  const value = aktools ?? akshare;
+  return typeof value === "string" ? value : null;
+}
+
+function parseMaybeJson(text: string): unknown {
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text.trim();
+  }
+}
+
+function normalizedBaseUrl(value: string) {
+  return value.endsWith("/") ? value : `${value}/`;
+}
 
 function getCurrentMinuteISO(): string {
   const d = new Date();
