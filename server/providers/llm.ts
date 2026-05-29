@@ -8,8 +8,14 @@ export interface LLMAnalysisResult {
   direction: "bullish" | "bearish" | "neutral";
   /** 绝对影响力得分 0-100 */
   impactScore: number;
+  /** 置信度得分 0-100 */
+  confidence: number;
+  /** 影响周期 */
+  horizon: string;
   /** 一句话中文摘要（≤30字） */
   summary: string;
+  /** LLM 对话详细明细日志 */
+  llmLogs?: string[];
 }
 
 interface LLMTaskState {
@@ -134,6 +140,7 @@ export async function runLlmAnalysis(
   taskState.lastProcessedCount = uncachedCount;
 
   appendLog(`分析任务启动，共 ${items.length} 条事件，其中 ${uncachedCount} 条未缓存`);
+  appendLog(`【System Prompt】:\n${SYSTEM_PROMPT}`);
 
   try {
     const result = await analyzeNewsItemsWithLogging(items);
@@ -195,7 +202,7 @@ async function analyzeNewsItemsWithLogging(
 
     try {
       appendLog(`[${batchNum}/${totalBatches}] 发送批次，${batch.length} 条...`);
-      const batchResults = await callLlmBatch(batch);
+      const batchResults = await callLlmBatch(batch, { appendLog });
       for (const result of batchResults) {
         analysisCache.set(result.id, result);
         resultMap.set(result.id, result);
@@ -216,31 +223,43 @@ async function analyzeNewsItemsWithLogging(
 // ─── LLM API Call ─────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `你是一位黄金市场专业分析师。
-对于输入的每条新闻，请判断其对黄金价格的影响，输出严格的 JSON 数组。
-每个元素格式：
+对于输入的每条新闻，请判断其对黄金价格的影响，输出一个 JSON 对象，其中包含一个 results 数组。
+每个结果对应输入的新闻条目。
+results 数组中的每个元素格式：
 {
   "id": "<原始id>",
   "category": "<分类，从[美联储,美元,地缘政治,避险情绪,通胀,黄金市场,美债]中选一>",
   "direction": "<bullish|bearish|neutral，对黄金价格而言>",
   "impactScore": <0-100的整数，表示影响力强度>,
+  "confidence": <0-100的整数，表示对该分析结论的置信度>,
+  "horizon": "<影响周期，从[1小时,4小时,1天,3天,7天]中选一>",
   "summary": "<一句话中文摘要，不超过30字>"
 }
 规则：
-- bullish = 利多黄金（如降息、地缘冲突、避险需求）
+- bullish = 利多黄金（如降息、地缘冲突、避险需求增加）
 - bearish = 利空黄金（如加息、美元走强、风险偏好提升）
 - neutral = 影响不明确或与黄金无关
 - impactScore：重大事件(美联储决议/战争)70-100，重要数据(CPI/非农)40-70，一般消息10-40
-- 仅输出合法JSON数组，不要任何额外文字、代码块标记或解释`;
+- confidence：置信度评估，考虑信息源可靠度与逻辑推导的确定性
+- horizon：影响持续的预期时间范围
+- 仅输出合法的 JSON 对象，格式必须是：{ "results": [...] }，不要任何额外文字、代码块标记或解释`;
 
-async function callLlmBatch(
-  items: Array<{ id: string; title: string }>
+export async function callLlmBatch(
+  items: Array<{ id: string; title: string }>,
+  options?: { appendLog?: (msg: string) => void }
 ): Promise<LLMAnalysisResult[]> {
   const userContent = JSON.stringify(
     items.map((item) => ({ id: item.id, title: item.title }))
   );
 
+  const appendLog = options?.appendLog;
+  if (appendLog) {
+    appendLog(`[LLM 请求参数] Model: ${config.llmModel}, URL: ${config.llmBaseUrl}/v1/chat/completions`);
+    appendLog(`[LLM 输入]\n${userContent}`);
+  }
+
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15_000);
+  const timeoutId = setTimeout(() => controller.abort(), 60_000);
 
   try {
     const response = await fetch(`${config.llmBaseUrl}/v1/chat/completions`, {
@@ -264,7 +283,9 @@ async function callLlmBatch(
 
     if (!response.ok) {
       const errText = await response.text().catch(() => "");
-      throw new Error(`LLM API HTTP ${response.status}: ${errText.slice(0, 200)}`);
+      const errorMsg = `LLM API HTTP ${response.status}: ${errText.slice(0, 200)}`;
+      if (appendLog) appendLog(`[LLM 错误] ${errorMsg}`);
+      throw new Error(errorMsg);
     }
 
     const data = await response.json() as {
@@ -272,7 +293,29 @@ async function callLlmBatch(
     };
 
     const content = data.choices?.[0]?.message?.content ?? "";
-    return parseLlmResponse(content, items);
+    if (appendLog) {
+      appendLog(`[LLM 输出]\n${content}`);
+    }
+
+    const parsedResults = parseLlmResponse(content, items);
+
+    // 写入内存缓存与每个结果的独立日志中
+    for (const result of parsedResults) {
+      const eventLogs = [
+        `[LLM 请求参数] Model: ${config.llmModel}, URL: ${config.llmBaseUrl}/v1/chat/completions`,
+        `[LLM 输入]\n${userContent}`,
+        `[LLM 输出]\n${content}`,
+        `[解析结果] 类别=${result.category}, 方向=${result.direction === "bullish" ? "利多" : result.direction === "bearish" ? "利空" : "中性"}, 得分=${result.impactScore}, 置信度=${result.confidence}%, 影响周期=${result.horizon}`
+      ];
+      result.llmLogs = eventLogs;
+      analysisCache.set(result.id, result);
+    }
+
+    return parsedResults;
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (appendLog) appendLog(`[LLM 调用异常] ${msg}`);
+    throw error;
   } finally {
     clearTimeout(timeoutId);
   }
@@ -283,18 +326,29 @@ function parseLlmResponse(
   originalItems: Array<{ id: string; title: string }>
 ): LLMAnalysisResult[] {
   try {
-    // 尝试直接解析
     let parsed: unknown;
-    const trimmed = content.trim();
+    let jsonStr = content.trim();
 
-    // 有时模型会输出 {"results": [...]} 格式
-    const jsonObj = JSON.parse(trimmed) as Record<string, unknown>;
+    // 自动剥离 Markdown 代码块标记
+    if (jsonStr.startsWith("```")) {
+      jsonStr = jsonStr.replace(/^```[a-zA-Z]*\s*/, "");
+      jsonStr = jsonStr.replace(/\s*```$/, "");
+      jsonStr = jsonStr.trim();
+    }
+
+    const jsonObj = JSON.parse(jsonStr) as Record<string, unknown>;
     if (Array.isArray(jsonObj)) {
       parsed = jsonObj;
     } else {
-      // 查找任意数组值
-      const arrValue = Object.values(jsonObj).find((v) => Array.isArray(v));
-      parsed = arrValue ?? jsonObj;
+      // 优先从 results 数组查找
+      const resultsArr = jsonObj.results;
+      if (Array.isArray(resultsArr)) {
+        parsed = resultsArr;
+      } else {
+        // 查找任意第一个数组值
+        const arrValue = Object.values(jsonObj).find((v) => Array.isArray(v));
+        parsed = arrValue ?? jsonObj;
+      }
     }
 
     const arr = Array.isArray(parsed) ? parsed : [parsed];
@@ -306,11 +360,13 @@ function parseLlmResponse(
         category: String(item.category ?? "黄金市场"),
         direction: validateDirection(item.direction),
         impactScore: clampScore(Number(item.impactScore ?? 30)),
+        confidence: clampScore(Number(item.confidence ?? 80)),
+        horizon: validateHorizon(item.horizon),
         summary: String(item.summary ?? "")
       }))
       .filter((item) => item.id && originalItems.some((o) => o.id === item.id));
-  } catch {
-    console.warn("[LLM] Failed to parse response:", content.slice(0, 300));
+  } catch (err) {
+    console.warn("[LLM] Failed to parse response:", content.slice(0, 300), err);
     return [];
   }
 }
@@ -318,6 +374,13 @@ function parseLlmResponse(
 function validateDirection(value: unknown): "bullish" | "bearish" | "neutral" {
   if (value === "bullish" || value === "bearish" || value === "neutral") return value;
   return "neutral";
+}
+
+function validateHorizon(value: unknown): string {
+  const allowed = ["1小时", "4小时", "1天", "3天", "7天"];
+  const valStr = String(value ?? "").trim();
+  if (allowed.includes(valStr)) return valStr;
+  return "1天";
 }
 
 function clampScore(value: number): number {

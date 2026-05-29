@@ -25,8 +25,14 @@ async function fetchFromAktools(): Promise<Quote> {
   const url = new URL("/api/public/spot_quotations_sge", normalizedBaseUrl(config.aktoolsBaseUrl));
   url.searchParams.set("symbol", config.aktoolsAu9999Symbol);
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
   try {
-    const response = await fetch(url, { headers: { Accept: "application/json" } });
+    const response = await fetch(url, { 
+      headers: { Accept: "application/json" },
+      signal: controller.signal
+    });
     if (!response.ok) throw new Error(`AKTools spot_quotations_sge ${response.status}`);
 
     const rows = (await response.json()) as unknown;
@@ -65,6 +71,8 @@ async function fetchFromAktools(): Promise<Quote> {
       };
     }
     return unavailable(reason, "error");
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 

@@ -38,8 +38,34 @@ const NEWS_FAILURE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cool-off on failur
 
 // ─── Fetch ────────────────────────────────────────────────────────────────
 
-function fetchWithProxy(urlStr: string): Promise<string> {
+function fetchWithProxy(urlStr: string, timeoutMs = 10000): Promise<string> {
   return new Promise((resolve, reject) => {
+    let resolvedOrRejected = false;
+    let activeReq: any = null;
+
+    const timeoutId = setTimeout(() => {
+      if (resolvedOrRejected) return;
+      resolvedOrRejected = true;
+      if (activeReq) {
+        try { activeReq.destroy(); } catch (_) {}
+      }
+      reject(new Error(`NewsNow fetch timeout (${timeoutMs}ms)`));
+    }, timeoutMs);
+
+    const safeResolve = (val: string) => {
+      if (resolvedOrRejected) return;
+      resolvedOrRejected = true;
+      clearTimeout(timeoutId);
+      resolve(val);
+    };
+
+    const safeReject = (err: Error) => {
+      if (resolvedOrRejected) return;
+      resolvedOrRejected = true;
+      clearTimeout(timeoutId);
+      reject(err);
+    };
+
     const url = new URL(urlStr);
     const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy;
 
@@ -61,6 +87,7 @@ function fetchWithProxy(urlStr: string): Promise<string> {
             Host: `${url.hostname}:443`
           }
         });
+        activeReq = connectReq;
 
         connectReq.on("connect", (res, socket) => {
           if (res.statusCode === 200) {
@@ -71,19 +98,20 @@ function fetchWithProxy(urlStr: string): Promise<string> {
               response.on("data", (chunk) => data += chunk);
               response.on("end", () => {
                 if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) {
-                  resolve(data);
+                  safeResolve(data);
                 } else {
-                  reject(new Error(`NewsNow API HTTP ${response.statusCode}`));
+                  safeReject(new Error(`NewsNow API HTTP ${response.statusCode}`));
                 }
               });
             });
-            req.on("error", reject);
+            activeReq = req;
+            req.on("error", safeReject);
           } else {
-            reject(new Error(`Proxy CONNECT failed: ${res.statusCode}`));
+            safeReject(new Error(`Proxy CONNECT failed: ${res.statusCode}`));
           }
         });
 
-        connectReq.on("error", reject);
+        connectReq.on("error", safeReject);
         connectReq.end();
       } else {
         const req = http.get({
@@ -96,13 +124,14 @@ function fetchWithProxy(urlStr: string): Promise<string> {
           response.on("data", (chunk) => data += chunk);
           response.on("end", () => {
             if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) {
-              resolve(data);
+              safeResolve(data);
             } else {
-              reject(new Error(`NewsNow API HTTP ${response.statusCode}`));
+              safeReject(new Error(`NewsNow API HTTP ${response.statusCode}`));
             }
           });
         });
-        req.on("error", reject);
+        activeReq = req;
+        req.on("error", safeReject);
       }
     } else {
       const getFn = url.protocol === "https:" ? https.get : http.get;
@@ -111,9 +140,9 @@ function fetchWithProxy(urlStr: string): Promise<string> {
         response.on("data", (chunk) => data += chunk);
         response.on("end", () => {
           if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) {
-            resolve(data);
+            safeResolve(data);
           } else {
-            reject(new Error(`NewsNow API HTTP ${response.statusCode}`));
+            safeReject(new Error(`NewsNow API HTTP ${response.statusCode}`));
           }
         });
       });
@@ -203,6 +232,9 @@ export async function fetchNewsEvents(force = false): Promise<{ events: NewsEven
             event.summary = result.summary || event.title;
             event.llmImpactScore = result.impactScore;
             event.llmAnalyzed = true;
+            event.llmConfidence = result.confidence;
+            event.llmImpactHorizon = result.horizon;
+            event.llmLogs = result.llmLogs;
             analyzedCount++;
           }
         }
@@ -236,21 +268,51 @@ export async function fetchNewsEvents(force = false): Promise<{ events: NewsEven
   }
 }
 
-// ─── 原始事件构造（无关键词猜测，LLM 会覆盖）──────────────────────────
+function guessCategory(title: string): string {
+  if (title.includes("美联储") || title.includes("鲍曼") || title.includes("鲍威尔") || title.includes("FOMC") || title.includes("降息") || title.includes("加息") || title.includes("联储")) {
+    return "美联储";
+  }
+  if (title.includes("CPI") || title.includes("通胀") || title.includes("PCE") || title.includes("物价") || title.includes("调和CPI")) {
+    return "通胀";
+  }
+  if (title.includes("美元") || title.includes("美指") || title.includes("汇率")) {
+    return "美元";
+  }
+  if (title.includes("美债") || title.includes("国债") || title.includes("收益率")) {
+    return "美债";
+  }
+  if (title.includes("金") || title.includes("购金") || title.includes("黄金") || title.includes("贵金属")) {
+    return "黄金市场";
+  }
+  if (title.includes("冲突") || title.includes("地缘") || title.includes("以色列") || title.includes("乌克兰") || title.includes("伊朗") || title.includes("战争") || title.includes("局势") || title.includes("战事")) {
+    return "地缘政治";
+  }
+  return "宏观经济";
+}
 
 function toEventRaw(item: NewsNowItem, sourceName: string): NewsEvent {
   const title = item.title.trim();
+  const category = guessCategory(title);
 
   return {
     id: crypto.createHash("sha1").update(item.url || title).digest("hex"),
     time: new Date(item.pubDate || item.time || Date.now()).toISOString(),
     source: sourceName,
     title,
-    category: "黄金市场",
+    category,
     direction: "neutral",
     impact: 0,
     summary: title,
     url: item.url,
     llmAnalyzed: false
   };
+}
+
+export function updateNewsEventCache(updatedEvent: NewsEvent) {
+  if (cachedResult && cachedResult.events) {
+    const idx = cachedResult.events.findIndex((e) => e.id === updatedEvent.id);
+    if (idx !== -1) {
+      cachedResult.events[idx] = { ...updatedEvent };
+    }
+  }
 }

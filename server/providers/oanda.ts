@@ -29,6 +29,22 @@ const headers = () => ({
   "Content-Type": "application/json"
 });
 
+async function fetchWithTimeout(url: string | URL, init?: RequestInit, timeoutMs = 10000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  if (init?.signal) {
+    init.signal.addEventListener("abort", () => controller.abort());
+  }
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 function unavailable(symbol: Quote["symbol"], label: string, unit: string, reason: string): Quote {
   return {
     symbol,
@@ -63,7 +79,7 @@ export async function fetchOandaQuotes(): Promise<{ quotes: Quote[]; candles: Ca
     const instruments = "XAU_USD,USD_CNH";
     const priceUrl = `${oandaBaseUrl}/v3/accounts/${accountId}/pricing?instruments=${instruments}`;
     const [priceRes, xauCandlesRaw, cnhCandlesRaw] = await Promise.all([
-      fetch(priceUrl, { headers: headers() }),
+      fetchWithTimeout(priceUrl, { headers: headers() }),
       fetchOandaCandles("XAU_USD", "M15", 2880),
       fetchOandaCandles("USD_CNH", "M15", 2880)
     ]);
@@ -108,7 +124,7 @@ export async function fetchOandaQuotes(): Promise<{ quotes: Quote[]; candles: Ca
 async function getAccountId() {
   if (resolvedAccountId) return resolvedAccountId;
 
-  const response = await fetch(`${oandaBaseUrl}/v3/accounts`, { headers: headers() });
+  const response = await fetchWithTimeout(`${oandaBaseUrl}/v3/accounts`, { headers: headers() });
   if (!response.ok) throw new Error(`OANDA accounts ${response.status}`);
 
   const json = (await response.json()) as { accounts?: Array<{ id: string }> };
@@ -222,7 +238,7 @@ export async function fetchOandaCandles(
   if (cached && Date.now() - cached.updatedAt < CANDLE_CACHE_TTL_MS) return cached.candles;
 
   const candleUrl = `${oandaBaseUrl}/v3/instruments/${instrument}/candles?granularity=${granularity}&count=${count}&price=M`;
-  const response = await fetch(candleUrl, { headers: headers() });
+  const response = await fetchWithTimeout(candleUrl, { headers: headers() });
   if (!response.ok) throw new Error(`OANDA ${instrument} candles ${response.status}`);
 
   const json = (await response.json()) as { candles: OandaCandle[] };
@@ -344,7 +360,7 @@ export async function fetchOandaCandlesForDay(
   const to = encodeURIComponent(toTimeStr);
   const url = `${oandaBaseUrl}/v3/instruments/${instrument}/candles?granularity=M1&from=${from}&to=${to}&price=M`;
 
-  const response = await fetch(url, { headers: headers() });
+  const response = await fetchWithTimeout(url, { headers: headers() });
   if (response.status === 404 || response.status === 422) return []; // weekend / holiday
   if (!response.ok) throw new Error(`OANDA ${instrument} candles for day ${date}: ${response.status}`);
   const json = (await response.json()) as { candles?: OandaCandle[] };

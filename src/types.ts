@@ -36,6 +36,9 @@ export interface NewsEvent {
   url?: string;
   llmImpactScore?: number | null;
   llmAnalyzed?: boolean;
+  llmConfidence?: number | null;
+  llmImpactHorizon?: string | null;
+  llmLogs?: string[];
 }
 
 export interface TechnicalIndicators {

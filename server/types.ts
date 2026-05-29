@@ -37,6 +37,12 @@ export interface NewsEvent {
   llmImpactScore?: number | null;
   /** 是否经过 LLM 分析 */
   llmAnalyzed?: boolean;
+  /** LLM 分析的置信度得分 0-100 */
+  llmConfidence?: number | null;
+  /** LLM 分析的影响周期 */
+  llmImpactHorizon?: string | null;
+  /** LLM 分析的对话日志明细 */
+  llmLogs?: string[];
 }
 
 export interface TechnicalIndicators {

@@ -37,8 +37,8 @@ import {
   db
 } from "./db.js";
 import { fetchAu9999 } from "./providers/au9999.js";
-import { fetchNewsEvents } from "./providers/news.js";
-import { runLlmAnalysis, getLlmTaskState, isLlmConfigured } from "./providers/llm.js";
+import { fetchNewsEvents, updateNewsEventCache } from "./providers/news.js";
+import { runLlmAnalysis, getLlmTaskState, isLlmConfigured, callLlmBatch } from "./providers/llm.js";
 import {
   fetchOandaQuotes,
   fetchOandaCandles,
@@ -699,6 +699,71 @@ app.get("/api/events/:id/reaction", async (request, reply) => {
   }
 });
 
+app.post("/api/events/:id/analyze", async (request, reply) => {
+  if (!isLlmConfigured()) {
+    reply.status(400).send({ error: "LLM 未配置，请设置 LLM_API_KEY" });
+    return;
+  }
+  
+  const { id } = request.params as { id: string };
+  const events = getAllEventsFromDb();
+  const event = events.find((e) => e.id === id);
+  if (!event) {
+    reply.status(404).send({ error: "事件不存在" });
+    return;
+  }
+
+  const logs: string[] = [];
+  const appendLogFn = (msg: string) => {
+    const ts = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    logs.push(`[${ts}] ${msg}`);
+  };
+
+  appendLogFn(`开始为单条事件进行 AI 智能舆情分析...\n- 事件ID: ${event.id}\n- 标题: ${event.title}`);
+
+  try {
+    const results = await callLlmBatch([{ id: event.id, title: event.title }], {
+      appendLog: appendLogFn
+    });
+
+    if (results.length === 0) {
+      throw new Error("LLM 未返回有效解析结果");
+    }
+
+    const result = results[0];
+    event.category = result.category;
+    event.direction = result.direction;
+    event.impact = result.direction === "bullish"
+      ? result.impactScore
+      : result.direction === "bearish"
+        ? -result.impactScore
+        : 0;
+    event.summary = result.summary || event.title;
+    event.llmImpactScore = result.impactScore;
+    event.llmAnalyzed = true;
+    event.llmConfidence = result.confidence;
+    event.llmImpactHorizon = result.horizon;
+    event.llmLogs = result.llmLogs;
+
+    // 保存回数据库
+    saveEvents([event]);
+    
+    // 更新内存的 News 缓存，防止被 refreshLiveData() 中的 cachedNews 覆写
+    updateNewsEventCache(event);
+    
+    // 重新生成看板快照并广播
+    await refreshLiveData();
+
+    appendLogFn(`【分析完成并成功入库】\n- 分类: ${event.category}\n- 影响方向: ${event.direction === "bullish" ? "利多" : event.direction === "bearish" ? "利空" : "中性"}\n- 影响得分: ${event.impact}\n- 置信度: ${event.llmConfidence}%\n- 影响周期: ${event.llmImpactHorizon}\n- 简要总结: ${event.summary}`);
+
+    return { ok: true, event, logs };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    appendLogFn(`[错误] 分析过程中出现异常: ${msg}`);
+    reply.status(500).send({ error: msg, logs });
+  }
+});
+
 app.get("/api/settings/data/export", async (_request, reply) => {
   const data = exportAllData();
   reply.header("Content-Type", "application/json");
@@ -776,6 +841,9 @@ async function fetchAndSyncDataset(datasetId: string) {
                 event.summary = result.summary || event.title;
                 event.llmImpactScore = result.impactScore;
                 event.llmAnalyzed = true;
+                event.llmConfidence = result.confidence;
+                event.llmImpactHorizon = result.horizon;
+                event.llmLogs = result.llmLogs;
               }
             }
             saveEvents(news.events);
@@ -807,12 +875,32 @@ async function fetchAndSyncDataset(datasetId: string) {
 const server = await app.listen({ port: config.port, host: "0.0.0.0" });
 app.log.info(`Aurum Watch API listening on ${server}`);
 
-// Initial refresh（首次失败不影响定时器启动）
-try {
-  await refreshLiveData();
-} catch (err) {
-  app.log.warn("Initial refresh failed, background tasks will still start: " + (err instanceof Error ? err.message : err));
-}
+// Initialize scheduled task states
+scheduledTaskState.fullRefresh.status = "running";
+scheduledTaskState.fullRefresh.lastStartedAt = new Date().toISOString();
+scheduledTaskState.fullRefresh.nextRunAt = new Date(Date.now() + config.refreshIntervalMs).toISOString();
+
+scheduledTaskState.minuteAggregation.nextRunAt = (() => {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() + 1, 0, 0);
+  return d.toISOString();
+})();
+
+scheduledTaskState.llmAnalysis.nextRunAt = new Date(Date.now() + config.llmAnalysisIntervalMs).toISOString();
+
+// Initial refresh（后台运行，首次失败不影响定时器和服务器启动）
+refreshLiveData()
+  .then(() => {
+    app.log.info("Initial live data refresh complete.");
+    scheduledTaskState.fullRefresh.status = "done";
+    scheduledTaskState.fullRefresh.lastSuccessAt = new Date().toISOString();
+  })
+  .catch((err) => {
+    app.log.warn("Initial refresh failed, background tasks will still start: " + (err instanceof Error ? err.message : err));
+    scheduledTaskState.fullRefresh.status = "error";
+    scheduledTaskState.fullRefresh.lastError = err instanceof Error ? err.message : "Unknown error";
+  });
+
 startOandaStreamWorker();
 
 // Per-second tick timer
@@ -827,7 +915,6 @@ setInterval(() => {
 }, config.refreshIntervalMs);
 
 // LLM 新闻情绪分析（独立定时任务，默认 15 分钟）
-scheduledTaskState.llmAnalysis.nextRunAt = new Date(Date.now() + config.llmAnalysisIntervalMs).toISOString();
 setInterval(() => {
   scheduledTaskState.llmAnalysis.nextRunAt = new Date(Date.now() + config.llmAnalysisIntervalMs).toISOString();
   runTrackedTask(scheduledTaskState.llmAnalysis, runScheduledLlmAnalysis).catch((err) => app.log.error(err));
@@ -915,6 +1002,9 @@ async function runScheduledLlmAnalysis() {
         event.summary = result.summary || event.title;
         event.llmImpactScore = result.impactScore;
         event.llmAnalyzed = true;
+        event.llmConfidence = result.confidence;
+        event.llmImpactHorizon = result.horizon;
+        event.llmLogs = result.llmLogs;
       }
     }
     saveEvents(events);
@@ -924,51 +1014,67 @@ async function runScheduledLlmAnalysis() {
   broadcastUpdate();
 }
 
-function startOandaStreamWorker() {
+async function startOandaStreamWorker() {
   if (!config.oandaToken) return;
-
-  // 立即标记为运行中（连接建立后 onStatus 会更新更精确的状态）
-  realtimeTaskState.oandaStream.status = "running";
-  realtimeTaskState.oandaStream.lastStartedAt = new Date().toISOString();
-  oandaStreamStatus = { state: "connecting", detail: "正在连接 OANDA 行情流..." };
 
   const controller = new AbortController();
   const shutdown = () => controller.abort();
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 
-  startOandaPricingStream({
-    signal: controller.signal,
-    onStatus: (status) => {
-      oandaStreamStatus = status;
-      realtimeTaskState.oandaStream.status =
-        status.state === "connected" || status.state === "connecting"
-          ? "running"
-          : status.state === "error"
-            ? "error"
-            : "stopped";
-      if (status.state === "connecting") realtimeTaskState.oandaStream.lastStartedAt = new Date().toISOString();
-      if (status.state === "connected") realtimeTaskState.oandaStream.lastSuccessAt = new Date().toISOString();
-      if (status.state === "stopped") {
-        realtimeTaskState.oandaStream.lastFinishedAt = new Date().toISOString();
-        realtimeTaskState.oandaStream.lastError = null;
-      }
-      if (status.state === "error") {
-        realtimeTaskState.oandaStream.lastErrorAt = new Date().toISOString();
-        realtimeTaskState.oandaStream.lastError = status.detail;
-      }
-      if (status.state === "error") {
-        app.log.warn(status.detail);
-      } else {
-        app.log.info(status.detail);
-      }
-    },
-    onPrices: (prices) => {
-      oandaStreamQueue = oandaStreamQueue
-        .then(() => handleOandaStreamPrices(prices))
-        .catch((error) => app.log.error(error));
+  while (!controller.signal.aborted) {
+    // 立即标记为运行中（连接建立后 onStatus 会更新更精确的状态）
+    realtimeTaskState.oandaStream.status = "running";
+    realtimeTaskState.oandaStream.lastStartedAt = new Date().toISOString();
+    oandaStreamStatus = { state: "connecting", detail: "正在连接 OANDA 行情流..." };
+
+    try {
+      await startOandaPricingStream({
+        signal: controller.signal,
+        onStatus: (status) => {
+          oandaStreamStatus = status;
+          realtimeTaskState.oandaStream.status =
+            status.state === "connected" || status.state === "connecting"
+              ? "running"
+              : status.state === "error"
+                ? "error"
+                : "stopped";
+          if (status.state === "connecting") realtimeTaskState.oandaStream.lastStartedAt = new Date().toISOString();
+          if (status.state === "connected") realtimeTaskState.oandaStream.lastSuccessAt = new Date().toISOString();
+          if (status.state === "stopped") {
+            realtimeTaskState.oandaStream.lastFinishedAt = new Date().toISOString();
+            realtimeTaskState.oandaStream.lastError = null;
+          }
+          if (status.state === "error") {
+            realtimeTaskState.oandaStream.lastErrorAt = new Date().toISOString();
+            realtimeTaskState.oandaStream.lastError = status.detail;
+          }
+          if (status.state === "error") {
+            app.log.warn(status.detail);
+          } else {
+            app.log.info(status.detail);
+          }
+        },
+        onPrices: (prices) => {
+          oandaStreamQueue = oandaStreamQueue
+            .then(() => handleOandaStreamPrices(prices))
+            .catch((error) => app.log.error(error));
+        }
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      app.log.error(`OANDA 行情流工作线程异常: ${msg}`);
+      realtimeTaskState.oandaStream.status = "error";
+      realtimeTaskState.oandaStream.lastError = msg;
+      realtimeTaskState.oandaStream.lastErrorAt = new Date().toISOString();
     }
-  }).catch((error) => app.log.error(error));
+
+    if (controller.signal.aborted) break;
+
+    // 延迟 5 秒后重连，防止网络彻底断开时 CPU 占用过高
+    app.log.info("OANDA 行情流连接已断开，将在 5 秒后尝试重连...");
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
 }
 
 async function handleOandaStreamPrices(prices: OandaStreamPrice[]) {

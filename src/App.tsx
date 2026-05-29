@@ -55,6 +55,14 @@ export function App() {
     setData({ ...dashboard, candles });
   }, []);
 
+  React.useEffect(() => {
+    const handleRefresh = () => {
+      loadDashboard().catch(console.error);
+    };
+    window.addEventListener("refresh-dashboard", handleRefresh);
+    return () => window.removeEventListener("refresh-dashboard", handleRefresh);
+  }, [loadDashboard]);
+
   // ── Hash routing ──────────────────────────────────────────────────────
   React.useEffect(() => {
     function onHashChange() {

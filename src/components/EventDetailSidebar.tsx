@@ -1,5 +1,5 @@
 import React from "react";
-import { X, Star, Loader2, ExternalLink, Sparkles } from "lucide-react";
+import { X, Star, Loader2, ExternalLink, Sparkles, Terminal } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { NewsEvent } from "../types";
 
@@ -53,9 +53,15 @@ export function EventDetailSidebar({ event: propEvent, onClose }: EventDetailSid
   const [analyzing, setAnalyzing] = React.useState<boolean>(false);
   const [event, setEvent] = React.useState<NewsEvent>(propEvent);
 
+  const [logs, setLogs] = React.useState<string[]>([]);
+  const [logModalOpen, setLogModalOpen] = React.useState<boolean>(false);
+  const [modalStatus, setModalStatus] = React.useState<"analyzing" | "done" | "error">("analyzing");
+  const [modalError, setModalError] = React.useState<string | null>(null);
+
   // Sync from parent prop
   React.useEffect(() => {
     setEvent(propEvent);
+    setSelectedHorizon(propEvent.llmImpactHorizon || "1天");
   }, [propEvent]);
 
   React.useEffect(() => {
@@ -75,36 +81,49 @@ export function EventDetailSidebar({ event: propEvent, onClose }: EventDetailSid
 
   const handleTriggerAnalysis = async () => {
     setAnalyzing(true);
+    setLogs([`[系统提示] 正在初始化 AI 分析环境...`]);
+    setLogModalOpen(true);
+    setModalStatus("analyzing");
+    setModalError(null);
+
     try {
-      const res = await fetch("/api/tasks/llm-analysis/trigger", { method: "POST" });
-      if (!res.ok) throw new Error("Trigger failed");
-      // Poll until LLM analysis completes
-      for (let i = 0; i < 60; i++) {
-        await new Promise((r) => setTimeout(r, 2000));
-        const stateRes = await fetch("/api/tasks/llm-analysis");
-        const state = await stateRes.json();
-        if (state.status === "done" || state.status === "error") break;
+      const res = await fetch(`/api/events/${event.id}/analyze`, { method: "POST" });
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || "分析执行失败");
       }
-      // Refresh dashboard to get updated event data
-      const dashRes = await fetch("/api/dashboard");
-      const dash = await dashRes.json();
-      const updated = dash.events?.find((e: NewsEvent) => e.id === event.id);
-      if (updated) {
-        setEvent(updated);
-        setReaction(null); // force reaction re-fetch with new event impact
+
+      if (data.logs) {
+        setLogs(data.logs);
+      }
+      setModalStatus("done");
+
+      // 更新当前侧边栏的 event 数据
+      if (data.event) {
+        setEvent(data.event);
+        setSelectedHorizon(data.event.llmImpactHorizon || "1天");
+        setReaction(null); // 触发价格反应重新拉取
+        window.dispatchEvent(new CustomEvent("refresh-dashboard"));
       }
     } catch (err) {
-      console.error("Failed to trigger analysis:", err);
+      const msg = err instanceof Error ? err.message : "未知分析错误";
+      setLogs((prev) => [...prev, `[异常终止] ${msg}`]);
+      setModalStatus("error");
+      setModalError(msg);
     } finally {
       setAnalyzing(false);
     }
   };
 
   const confidence = React.useMemo(() => {
+    if (event.llmConfidence !== undefined && event.llmConfidence !== null) {
+      return event.llmConfidence;
+    }
     // Generate an aesthetic, consistent rating confidence percentage based on event parameters
     const code = event.id.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
     return Math.max(68, Math.min(96, 75 + (Math.abs(event.impact) % 15) + (code % 8)));
-  }, [event.id, event.impact]);
+  }, [event.id, event.impact, event.llmConfidence]);
 
   const isUnanalyzed = !event.llmAnalyzed;
   const isBullish = event.impact > 0;
@@ -168,6 +187,7 @@ export function EventDetailSidebar({ event: propEvent, onClose }: EventDetailSid
   }, [event.llmAnalyzed, event.summary, event.title]);
 
   return (
+    <>
     <aside className="dashboard-sidebar" aria-label="事件详情侧边栏">
       <div className="sidebar-header">
         <h2>单条舆情影响详情</h2>
@@ -252,15 +272,14 @@ export function EventDetailSidebar({ event: propEvent, onClose }: EventDetailSid
         </div>
         <div className="meta-row horizon-row">
           <span className="meta-label">影响周期</span>
-          <div className="horizon-btn-group">
+          <div className="horizon-btn-group" style={{ pointerEvents: "none" }}>
             {horizons.map((h) => (
-              <button
+              <span
                 key={h}
                 className={`horizon-btn ${selectedHorizon === h ? "active" : ""}`}
-                onClick={() => setSelectedHorizon(h)}
               >
                 {h}
-              </button>
+              </span>
             ))}
           </div>
         </div>
@@ -355,17 +374,183 @@ export function EventDetailSidebar({ event: propEvent, onClose }: EventDetailSid
             查看原文
           </a>
         )}
-        {!event.llmAnalyzed && (
+        {analyzing && (
+          <button
+            className="sidebar-action-btn sidebar-action-primary"
+            onClick={() => setLogModalOpen(true)}
+          >
+            <Loader2 size={14} className="animate-spin" />
+            查看分析中日志...
+          </button>
+        )}
+        {!analyzing && !event.llmAnalyzed && (
           <button
             className="sidebar-action-btn sidebar-action-primary"
             onClick={handleTriggerAnalysis}
-            disabled={analyzing}
           >
-            <Sparkles size={14} className={analyzing ? "animate-spin" : ""} />
-            {analyzing ? "分析中..." : "立即 AI 分析"}
+            <Sparkles size={14} />
+            立即 AI 分析
+          </button>
+        )}
+        {!analyzing && event.llmAnalyzed && (
+          <button
+            className="sidebar-action-btn sidebar-action-secondary"
+            onClick={() => {
+              setLogs(event.llmLogs || ["该事件已由 AI 分析，但未保存日志明细。"]);
+              setModalStatus("done");
+              setLogModalOpen(true);
+            }}
+          >
+            <Terminal size={14} />
+            查看分析日志
           </button>
         )}
       </div>
     </aside>
+
+    {logModalOpen && (
+      <AnalysisLogModal
+        logs={logs}
+        status={modalStatus}
+        eventTitle={propEvent.title}
+        category={event.category}
+        impact={event.impact}
+        confidence={event.llmConfidence}
+        horizon={event.llmImpactHorizon}
+        onClose={() => setLogModalOpen(false)}
+      />
+    )}
+    </>
+  );
+}
+
+interface AnalysisLogModalProps {
+  logs: string[];
+  status: "analyzing" | "done" | "error";
+  eventTitle: string;
+  category?: string;
+  impact?: number;
+  confidence?: number | null;
+  horizon?: string | null;
+  onClose: () => void;
+}
+
+function AnalysisLogModal({
+  logs,
+  status,
+  eventTitle,
+  category,
+  impact,
+  confidence,
+  horizon,
+  onClose
+}: AnalysisLogModalProps) {
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [logs.length, status]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-2xl max-h-[85vh] mx-4 bg-card border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-border bg-slate-900 text-slate-100">
+          <div className="flex items-center gap-2">
+            <Sparkles size={16} className="text-amber-400 animate-pulse" />
+            <h3 className="text-sm font-bold text-left">AI 智能舆情分析日志明细</h3>
+            {status === "analyzing" && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-amber-400 font-semibold">
+                <Loader2 size={10} className="animate-spin" />
+                正在分析...
+              </span>
+            )}
+            {status === "done" && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-semibold">
+                ✓ 分析完成
+              </span>
+            )}
+            {status === "error" && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-rose-400 font-semibold">
+                ✗ 分析失败
+              </span>
+            )}
+          </div>
+          <button
+            className="w-6 h-6 flex items-center justify-center rounded-md border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-100 transition-colors text-xs"
+            onClick={onClose}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Event Title Info */}
+        <div className="px-4 py-2.5 bg-muted/30 border-b border-border/50 text-xs text-muted-foreground flex flex-col gap-1 text-left">
+          <div className="truncate"><strong>分析事件：</strong>{eventTitle}</div>
+          {status === "done" && horizon && (
+            <div className="flex gap-4 flex-wrap mt-0.5">
+              <span><strong>AI分类：</strong>{category}</span>
+              <span><strong>影响评分：</strong>{impact}</span>
+              <span><strong>置信度：</strong>{confidence}%</span>
+              <span><strong>影响周期：</strong>{horizon}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Terminal Logs */}
+        <div
+          ref={scrollRef}
+          className="flex-1 overflow-y-auto p-4 font-mono text-[12px] leading-relaxed bg-black text-slate-100 m-3 rounded-lg border border-border max-h-[380px] text-left"
+        >
+          {logs.map((line, i) => {
+            let colorClass = "text-slate-300";
+            if (line.includes("开始为单条事件")) colorClass = "text-cyan-400 font-semibold";
+            else if (line.includes("【系统提示词") || line.includes("[LLM 请求参数]")) colorClass = "text-slate-500";
+            else if (line.includes("[LLM 输入]")) colorClass = "text-amber-400";
+            else if (line.includes("[LLM 输出]")) colorClass = "text-emerald-400";
+            else if (line.includes("【分析完成并成功入库】") || line.includes("分析成功")) colorClass = "text-emerald-500 font-bold";
+            else if (line.includes("[错误]") || line.includes("[异常终止]")) colorClass = "text-rose-400 font-semibold";
+            
+            return (
+              <div key={i} className={`py-0.5 whitespace-pre-wrap ${colorClass}`}>
+                {line}
+              </div>
+            );
+          })}
+          {status === "analyzing" && (
+            <div className="text-amber-400/80 animate-pulse mt-1 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+              正在调用 LLM 进行深度解析，这可能需要数秒时间...
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end gap-2 p-3 border-t border-border bg-muted/20">
+          <button
+            className="px-4 h-9 text-xs font-semibold rounded-md border border-border bg-background hover:bg-accent text-foreground transition-colors"
+            onClick={onClose}
+          >
+            关闭
+          </button>
+          {status === "done" && (
+            <button
+              className="px-4 h-9 text-xs font-semibold rounded-md bg-primary hover:bg-primary/90 text-primary-foreground transition-colors"
+              onClick={onClose}
+            >
+              完成
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

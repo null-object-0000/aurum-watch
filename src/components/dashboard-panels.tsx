@@ -245,7 +245,9 @@ export function EventFeed({
                 <span className={`event-impact-score ${impactClass}`}>{impactText}</span>
               </div>
               <div className="event-item-title">{event.title}</div>
-              <div className="event-item-desc">{event.summary || event.title}</div>
+              {event.llmAnalyzed && event.summary && event.summary !== event.title && (
+                <div className="event-item-desc">{event.summary}</div>
+              )}
             </a>
           );
         })}
