@@ -1,8 +1,8 @@
 import React from "react";
 import i18n from "i18next";
 
-export type ThemePreference = "system" | "dark" | "light";
-export type LanguagePreference = "system" | "zh-CN" | "en-US";
+export type ThemePreference = "dark" | "light";
+export type LanguagePreference = "zh-CN" | "en-US";
 export type MarketColorPreference = "red-up" | "green-up";
 
 export interface Preferences {
@@ -25,18 +25,9 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   const [theme, setThemeState] = React.useState<ThemePreference>(() => loadPreferences().theme);
   const [language, setLanguageState] = React.useState<LanguagePreference>(() => loadPreferences().language);
   const [marketColors, setMarketColorsState] = React.useState<MarketColorPreference>(() => loadPreferences().marketColors);
-  const [systemTheme, setSystemTheme] = React.useState<"dark" | "light">(() => detectSystemTheme());
-  const [systemLanguage, setSystemLanguage] = React.useState<"zh-CN" | "en-US">(() => detectSystemLanguage());
 
-  React.useEffect(() => {
-    const media = window.matchMedia("(prefers-color-scheme: light)");
-    const onChange = () => setSystemTheme(detectSystemTheme());
-    media.addEventListener("change", onChange);
-    return () => media.removeEventListener("change", onChange);
-  }, []);
-
-  const resolvedTheme = theme === "system" ? systemTheme : theme;
-  const resolvedLanguage = language === "system" ? systemLanguage : language;
+  const resolvedTheme = theme;
+  const resolvedLanguage = language;
 
   React.useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme;
@@ -58,7 +49,6 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   function setLanguage(value: LanguagePreference) {
     setLanguageState(value);
     persist({ language: value });
-    if (value === "system") setSystemLanguage(detectSystemLanguage());
   }
 
   function setMarketColors(value: MarketColorPreference) {
@@ -95,13 +85,39 @@ interface StoredPreferences {
 
 function loadPreferences(): StoredPreferences {
   const fallback: StoredPreferences = {
-    theme: "system",
-    language: "system",
+    theme: detectSystemTheme(),
+    language: detectSystemLanguage(),
     marketColors: "red-up"
   };
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "null") as Partial<StoredPreferences> | null;
-    return { ...fallback, ...parsed };
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(fallback));
+      return fallback;
+    }
+    const parsed = JSON.parse(raw) as Partial<StoredPreferences> | null;
+    let theme = parsed?.theme;
+    let language = parsed?.language;
+    let needsSave = false;
+
+    if (!theme || theme === ("system" as any)) {
+      theme = detectSystemTheme();
+      needsSave = true;
+    }
+    if (!language || language === ("system" as any)) {
+      language = detectSystemLanguage();
+      needsSave = true;
+    }
+    const marketColors = parsed?.marketColors ?? fallback.marketColors;
+    if (parsed?.marketColors !== marketColors) {
+      needsSave = true;
+    }
+
+    const loaded = { theme, language, marketColors };
+    if (needsSave) {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(loaded));
+    }
+    return loaded;
   } catch {
     return fallback;
   }

@@ -532,7 +532,7 @@ app.post("/api/settings/data/import", async (request, reply) => {
 
 app.post("/api/init/sync", async (_request, reply) => {
   try {
-    const [oanda, au9999, news] = await Promise.all([fetchOandaQuotes(), fetchAu9999(), fetchNewsEvents()]);
+    const [oanda, au9999, news] = await Promise.all([fetchOandaQuotes(), fetchAu9999(), fetchNewsEvents(true)]);
     saveQuotes(derivedQuotes([...oanda.quotes, au9999]));
     saveEvents(news.events);
       await refreshLiveData();
@@ -561,12 +561,12 @@ async function fetchAndSyncDataset(datasetId: string) {
       break;
     }
     case "NEWS": {
-      const news = await fetchNewsEvents();
+      const news = await fetchNewsEvents(true);
       saveEvents(news.events);
       break;
     }
     case "all": {
-      const [oanda, au9999, news] = await Promise.all([fetchOandaQuotes(), fetchAu9999(), fetchNewsEvents()]);
+      const [oanda, au9999, news] = await Promise.all([fetchOandaQuotes(), fetchAu9999(), fetchNewsEvents(true)]);
       const quotes = derivedQuotes([...oanda.quotes, au9999]);
       saveQuotes(quotes);
       saveEvents(news.events);

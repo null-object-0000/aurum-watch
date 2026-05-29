@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "react-i18next";
+import { usePreferences } from "../preferences";
 
 const TASKS_POLL_MS = 1000;
 
@@ -47,6 +48,7 @@ interface TasksPayload {
 
 export function Tasks() {
   const { t } = useTranslation();
+  const preferences = usePreferences();
   const [payload, setPayload] = React.useState<TasksPayload | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -62,7 +64,7 @@ export function Tasks() {
           setError(null);
         }
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : t("resolvedLanguage") === "en-US" ? "Failed to read task status" : "任务状态读取失败");
+        if (!cancelled) setError(err instanceof Error ? err.message : preferences.language === "en-US" ? "Failed to read task status" : "任务状态读取失败");
       }
     }
 
@@ -148,7 +150,7 @@ export function Tasks() {
           <div className="p-2.5 bg-primary/10 border border-primary/20 rounded-md flex flex-col gap-2.5">
             <div className="flex justify-between gap-2.5 text-muted-foreground text-xs">
               <span>{history.currentDay ? `${t("syncing")} ${history.currentDay}` : t(`status_${history.status}`)}</span>
-              <strong className="text-foreground font-bold">{history.completedDays} / {history.totalDays} {t("resolvedLanguage") === "en-US" ? "Days" : "天"}</strong>
+              <strong className="text-foreground font-bold">{history.completedDays} / {history.totalDays} {preferences.language === "en-US" ? "Days" : "天"}</strong>
             </div>
             <div className="h-1.25 overflow-hidden bg-muted rounded-full">
               <Progress value={progressPct} className="h-[5px]" />
@@ -156,7 +158,7 @@ export function Tasks() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2 border-t border-border/40 pt-2">
               <TaskFact label={t("status")} value={t(`status_${history.status}`)} />
               <TaskFact label={t("datasets")} value={history.datasetId ?? "--"} />
-              <TaskFact label={t("range")} value={history.startDate && history.endDate ? `${history.startDate} ${t("resolvedLanguage") === "en-US" ? "to" : "至"} ${history.endDate}` : "--"} />
+              <TaskFact label={t("range")} value={history.startDate && history.endDate ? `${history.startDate} ${preferences.language === "en-US" ? "to" : "至"} ${history.endDate}` : "--"} />
               <TaskFact label={t("start")} value={history.startedAt ? formatDateTime(history.startedAt) : "--"} />
               {history.error && <TaskFact label={t("error")} value={history.error} className="sm:col-span-2 text-destructive" />}
             </div>
@@ -212,6 +214,7 @@ function OverviewMetric({
 
 function TaskCard({ task }: { task: RuntimeTask }) {
   const { t } = useTranslation();
+  const preferences = usePreferences();
   return (
     <Card className={cn(
       "min-w-0 border bg-card text-card-foreground shadow-sm",
@@ -227,7 +230,7 @@ function TaskCard({ task }: { task: RuntimeTask }) {
         <StatusBadge status={task.status} />
       </CardHeader>
       <CardContent className="flex flex-col gap-1.5 p-3.5 pt-0">
-        {task.intervalMs !== undefined && <TaskFact label={t("interval")} value={formatInterval(task.intervalMs, t("resolvedLanguage"))} />}
+        {task.intervalMs !== undefined && <TaskFact label={t("interval")} value={formatInterval(task.intervalMs, preferences.language)} />}
         <TaskFact label={t("lastSuccess")} value={task.lastSuccessAt ? formatDateTime(task.lastSuccessAt) : "--"} />
         {task.nextRunAt !== undefined && <TaskFact label={t("nextRun")} value={task.nextRunAt ? formatDateTime(task.nextRunAt) : "--"} />}
         {task.lastError && <TaskFact label={t("error")} value={task.lastError} />}
@@ -235,6 +238,7 @@ function TaskCard({ task }: { task: RuntimeTask }) {
     </Card>
   );
 }
+
 
 function StatusBadge({ status }: { status: TaskStatus }) {
   const { t } = useTranslation();

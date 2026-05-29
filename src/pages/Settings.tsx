@@ -64,21 +64,21 @@ export function Settings() {
       status: runtimeSettings?.oanda?.configured ? "ok" : "warn",
       detail: runtimeSettings?.oanda?.configured 
         ? `${t("available")} · ${runtimeSettings.oanda.env}` 
-        : t("resolvedLanguage") === "en-US" ? "OANDA_API_TOKEN not configured" : "未配置 OANDA_API_TOKEN"
+        : preferences.language === "en-US" ? "OANDA_API_TOKEN not configured" : "未配置 OANDA_API_TOKEN"
     },
     {
       name: "AKTools / SGE",
       status: runtimeSettings?.au9999?.reachable ? "ok" : "warn",
       detail: runtimeSettings?.au9999?.reachable
-        ? (runtimeSettings.au9999.version ?? (t("resolvedLanguage") === "en-US" ? "API works" : "接口可用"))
-        : (runtimeSettings?.au9999?.error ?? (t("resolvedLanguage") === "en-US" ? "Unreachable or not configured" : "未配置或不可用"))
+        ? (runtimeSettings.au9999.version ?? (preferences.language === "en-US" ? "API works" : "接口可用"))
+        : (runtimeSettings?.au9999?.error ?? (preferences.language === "en-US" ? "Unreachable or not configured" : "未配置或不可用"))
     },
     {
       name: "GDELT",
       status: "ok",
       detail: runtimeSettings?.news?.query 
         ? `query: ${runtimeSettings.news.query}` 
-        : t("resolvedLanguage") === "en-US" ? "Public news sources" : "公开新闻源"
+        : preferences.language === "en-US" ? "Public news sources" : "公开新闻源"
     }
   ];
 
@@ -104,7 +104,6 @@ export function Settings() {
             <Select value={preferences.theme} onValueChange={(value) => preferences.setTheme(value as any)}>
               <SelectTrigger className="h-9 border border-input rounded-md px-3 text-xs bg-background"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="system">{t("system")}</SelectItem>
                 <SelectItem value="dark">{t("dark")}</SelectItem>
                 <SelectItem value="light">{t("light")}</SelectItem>
               </SelectContent>
@@ -115,7 +114,6 @@ export function Settings() {
             <Select value={preferences.language} onValueChange={(value) => preferences.setLanguage(value as any)}>
               <SelectTrigger className="h-9 border border-input rounded-md px-3 text-xs bg-background"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="system">{t("system")}</SelectItem>
                 <SelectItem value="zh-CN">{t("zh-CN")}</SelectItem>
                 <SelectItem value="en-US">{t("en-US")}</SelectItem>
               </SelectContent>

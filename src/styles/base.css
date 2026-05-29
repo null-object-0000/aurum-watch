@@ -18,11 +18,39 @@
   color: var(--foreground);
 }
 
-* { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; background: var(--background); color: var(--foreground); }
-button, input { font: inherit; }
-button { cursor: pointer; }
+* {
+  box-sizing: border-box;
+}
 
-.green { color: var(--down-color) !important; }
-.red { color: var(--up-color) !important; }
-.empty-state, .loading { min-height: 180px; display: grid; place-items: center; color: var(--muted-foreground); text-align: center; }
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.green {
+  color: var(--down-color) !important;
+}
+
+.red {
+  color: var(--up-color) !important;
+}
+
+.empty-state,
+.loading {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  color: var(--muted-foreground);
+  text-align: center;
+}

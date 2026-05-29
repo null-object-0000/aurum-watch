@@ -324,8 +324,24 @@ export async function fetchOandaCandlesForDay(
 ): Promise<OandaCandle[]> {
   if (!config.oandaToken) throw new Error("OANDA token missing");
 
+  const now = new Date();
+  const fromTime = new Date(`${date}T00:00:00Z`);
+
+  // If the query "from" date is in the future relative to current UTC time, return empty array (e.g. timezone offset issues)
+  if (fromTime.getTime() > now.getTime()) {
+    return [];
+  }
+
+  let toTimeStr = `${date}T23:59:59Z`;
+  const toTime = new Date(toTimeStr);
+
+  // If the query "to" date is in the future, cap it at current time to prevent OANDA 400 Bad Request
+  if (toTime.getTime() > now.getTime()) {
+    toTimeStr = now.toISOString();
+  }
+
   const from = encodeURIComponent(`${date}T00:00:00Z`);
-  const to = encodeURIComponent(`${date}T23:59:59Z`);
+  const to = encodeURIComponent(toTimeStr);
   const url = `${oandaBaseUrl}/v3/instruments/${instrument}/candles?granularity=M1&from=${from}&to=${to}&price=M`;
 
   const response = await fetch(url, { headers: headers() });
@@ -334,4 +350,3 @@ export async function fetchOandaCandlesForDay(
   const json = (await response.json()) as { candles?: OandaCandle[] };
   return (json.candles ?? []).filter((c) => c.complete);
 }
-

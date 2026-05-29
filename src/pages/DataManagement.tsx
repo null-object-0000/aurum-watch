@@ -80,6 +80,7 @@ interface SyncJob {
 
 export function DataManagement() {
   const { t } = useTranslation();
+  const preferences = usePreferences();
   const [settingsData, setSettingsData] = React.useState<SettingsData | null>(null);
   const [runtimeSettings, setRuntimeSettings] = React.useState<RuntimeSettings | null>(null);
   const [events, setEvents] = React.useState<NewsEvent[]>([]);
@@ -124,7 +125,7 @@ export function DataManagement() {
   }
 
   async function handleClear(datasetId: string, name: string) {
-    if (!window.confirm(t("resolvedLanguage") === "en-US" 
+    if (!window.confirm(preferences.language === "en-US" 
       ? `Are you sure you want to clear all history for "${name}"? This cannot be undone.`
       : `确认清空「${name}」的所有历史数据？此操作不可撤销。`)) return;
     setClearingDataset(datasetId);
@@ -145,13 +146,13 @@ export function DataManagement() {
   }
 
   async function handleDeleteEvent(id: string) {
-    if (!window.confirm(t("resolvedLanguage") === "en-US" ? "Are you sure you want to delete this event?" : "确认删除该舆情事件？")) return;
+    if (!window.confirm(preferences.language === "en-US" ? "Are you sure you want to delete this event?" : "确认删除该舆情事件？")) return;
     const res = await fetch(`/api/settings/data/events/${id}`, { method: "DELETE" });
     if (res.ok) {
-      showToast(t("resolvedLanguage") === "en-US" ? "Event deleted" : "已删除舆情事件");
+      showToast(preferences.language === "en-US" ? "Event deleted" : "已删除舆情事件");
       setEvents((prev) => prev.filter((e) => e.id !== id));
     } else {
-      showToast(t("resolvedLanguage") === "en-US" ? "Delete failed" : "删除失败", false);
+      showToast(preferences.language === "en-US" ? "Delete failed" : "删除失败", false);
     }
   }
 
@@ -164,7 +165,7 @@ export function DataManagement() {
     a.download = `aurum-watch-backup-${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast(t("resolvedLanguage") === "en-US" ? "Backup exported" : "已导出数据备份");
+    showToast(preferences.language === "en-US" ? "Backup exported" : "已导出数据备份");
   }
 
   async function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
@@ -178,10 +179,10 @@ export function DataManagement() {
         body: JSON.stringify(data)
       });
       if (!res.ok) throw new Error();
-      showToast(t("resolvedLanguage") === "en-US" ? "Imported successfully" : "导入成功");
+      showToast(preferences.language === "en-US" ? "Imported successfully" : "导入成功");
       await loadAll();
     } catch {
-      showToast(t("resolvedLanguage") === "en-US" ? "Import failed, please check file format" : "导入失败，请检查文件格式", false);
+      showToast(preferences.language === "en-US" ? "Import failed, please check file format" : "导入失败，请检查文件格式", false);
     }
     e.target.value = "";
   }
@@ -228,7 +229,7 @@ export function DataManagement() {
 
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
         <OverviewMetric icon={<Database size={17} />} label={t("historyRecords")} value={totalRecords.toLocaleString()} detail={t("historyDetail")} />
-        <OverviewMetric icon={<Clock3 size={17} />} label={t("maxSpan")} value={`${longestHistory} ${t("resolvedLanguage") === "en-US" ? "Days" : "天"}`} detail={latestUpdate ? `${t("latest")} ${formatDateTime(latestUpdate)}` : t("noHistory")} />
+        <OverviewMetric icon={<Clock3 size={17} />} label={t("maxSpan")} value={`${longestHistory} ${preferences.language === "en-US" ? "Days" : "天"}`} detail={latestUpdate ? `${t("latest")} ${formatDateTime(latestUpdate)}` : t("noHistory")} />
         <OverviewMetric icon={<Server size={17} />} label={t("dataSources")} value={`${configuredProviders}/${settingsData?.datasets.length ?? 0}`} detail={t("configuredProviders")} />
         <OverviewMetric icon={<HardDrive size={17} />} label={t("database")} value={`${settingsData?.database.sizeMb ?? "--"} MB`} detail={settingsData?.database.path ?? t("loading")} />
       </section>
@@ -302,7 +303,7 @@ export function DataManagement() {
           variant="destructive"
           className="h-9 text-xs"
           disabled={!!clearingDataset}
-          onClick={() => handleClear("all", t("resolvedLanguage") === "en-US" ? "All Data" : "所有数据")}
+          onClick={() => handleClear("all", preferences.language === "en-US" ? "All Data" : "所有数据")}
         >
           <Trash2 size={14} /> {t("clearAll")}
         </Button>
@@ -370,6 +371,7 @@ function DatasetCard({
   onClear: () => void;
 }) {
   const { t } = useTranslation();
+  const preferences = usePreferences();
   const configured = ds.id === "AU9999" && aktools ? Boolean(aktools.reachable) : ds.providers.some((p) => p.configured);
   const coverageState = ds.dataCount === 0 ? "empty" : ds.historyDays >= 30 ? "good" : "partial";
 
@@ -396,8 +398,8 @@ function DatasetCard({
       </div>
 
       <div className="flex flex-col gap-1">
-        <DatasetStatRow label={t("records")} value={`${ds.dataCount.toLocaleString()} ${t("resolvedLanguage") === "en-US" ? "items" : "条"}`} />
-        <DatasetStatRow label={t("span")} value={ds.historyDays > 0 ? `${ds.historyDays} ${t("resolvedLanguage") === "en-US" ? "Days" : "天"}` : t("noHistory")} />
+        <DatasetStatRow label={t("records")} value={`${ds.dataCount.toLocaleString()} ${preferences.language === "en-US" ? "items" : "条"}`} />
+        <DatasetStatRow label={t("span")} value={ds.historyDays > 0 ? `${ds.historyDays} ${preferences.language === "en-US" ? "Days" : "天"}` : t("noHistory")} />
         <DatasetStatRow label={t("latest")} value={ds.latestData ? formatDateTime(ds.latestData) : t("noHistory")} />
         {ds.id === "AU9999" && aktools?.configured && (
           <DatasetStatRow label={t("api")} value={aktools.reachable ? (aktools.version ?? "OK") : (aktools.error ?? t("unavailable"))} />
@@ -437,6 +439,7 @@ function DateRangeSyncForm({
   showToast: (msg: string, ok?: boolean) => void;
 }) {
   const { t } = useTranslation();
+  const preferences = usePreferences();
   const today = toDateStr(new Date());
   const default30 = toDateStr(new Date(Date.now() - 30 * 86_400_000));
 
@@ -522,8 +525,8 @@ function DateRangeSyncForm({
         body: JSON.stringify({ datasetId, startDate, endDate })
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: t("resolvedLanguage") === "en-US" ? "Request failed" : "请求失败" }));
-        throw new Error((err as any).error ?? t("resolvedLanguage") === "en-US" ? "Start sync failed" : "启动失败");
+        const err = await res.json().catch(() => ({ error: preferences.language === "en-US" ? "Request failed" : "请求失败" }));
+        throw new Error((err as any).error ?? preferences.language === "en-US" ? "Start sync failed" : "启动失败");
       }
       startPolling();
     } catch (err) {
@@ -607,7 +610,7 @@ function DateRangeSyncForm({
         <div className="p-2.5 bg-primary/10 border border-primary/20 rounded-md flex flex-col gap-2 my-1">
           <div className="flex justify-between gap-2.5 text-muted-foreground text-xs">
             <span>{syncJob.status === "done" ? t("syncComplete") : syncJob.currentDay ? `${t("syncing")} ${syncJob.currentDay}` : t("preparing")}</span>
-            <strong className="text-foreground font-bold">{syncJob.completedDays ?? 0} / {syncJob.totalDays ?? 0} {t("resolvedLanguage") === "en-US" ? "Days" : "天"}</strong>
+            <strong className="text-foreground font-bold">{syncJob.completedDays ?? 0} / {syncJob.totalDays ?? 0} {preferences.language === "en-US" ? "Days" : "天"}</strong>
           </div>
           <div className="h-1.25 overflow-hidden bg-muted rounded-full">
             <Progress value={progressPct} className="h-[5px]" />
@@ -633,18 +636,19 @@ function EventSupplementForm({
   showToast: (msg: string, ok?: boolean) => void;
 }) {
   const { t } = useTranslation();
+  const preferences = usePreferences();
   const [time, setTime] = React.useState("");
   const [title, setTitle] = React.useState("");
-  const [source, setSource] = React.useState(t("resolvedLanguage") === "en-US" ? "Manual Supplement" : "手动补录");
-  const [category, setCategory] = React.useState(t("resolvedLanguage") === "en-US" ? "Gold Market" : "黄金市场");
+  const [source, setSource] = React.useState(preferences.language === "en-US" ? "Manual Supplement" : "手动补录");
+  const [category, setCategory] = React.useState(preferences.language === "en-US" ? "Gold Market" : "黄金市场");
   const [direction, setDirection] = React.useState("bullish");
   const [impact, setImpact] = React.useState("30");
   const [submitting, setSubmitting] = React.useState(false);
 
   React.useEffect(() => {
-    setSource(t("resolvedLanguage") === "en-US" ? "Manual Supplement" : "手动补录");
-    setCategory(t("resolvedLanguage") === "en-US" ? "Gold Market" : "黄金市场");
-  }, [t("resolvedLanguage")]);
+    setSource(preferences.language === "en-US" ? "Manual Supplement" : "手动补录");
+    setCategory(preferences.language === "en-US" ? "Gold Market" : "黄金市场");
+  }, [preferences.language]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -684,7 +688,7 @@ function EventSupplementForm({
       </div>
       <div className="flex flex-col gap-1.5 min-w-0">
         <label className="text-muted-foreground text-[11px] font-bold uppercase tracking-[0.06em]">{t("title")}</label>
-        <Input type="text" className="h-9 text-xs bg-background" placeholder={t("resolvedLanguage") === "en-US" ? "e.g., Fed announces 25bp hike" : "例如：美联储宣布加息25bp"} value={title} onChange={(e) => setTitle(e.target.value)} required />
+        <Input type="text" className="h-9 text-xs bg-background" placeholder={preferences.language === "en-US" ? "e.g., Fed announces 25bp hike" : "例如：美联储宣布加息25bp"} value={title} onChange={(e) => setTitle(e.target.value)} required />
       </div>
       <div className="flex flex-col gap-1.5 min-w-0">
         <label className="text-muted-foreground text-[11px] font-bold uppercase tracking-[0.06em]">{t("source")}</label>
@@ -696,7 +700,7 @@ function EventSupplementForm({
           <Select value={category} onValueChange={setCategory}>
             <SelectTrigger className="h-9 border border-input rounded-md px-3 text-xs bg-background"><SelectValue /></SelectTrigger>
             <SelectContent>
-              {(t("resolvedLanguage") === "en-US"
+              {(preferences.language === "en-US"
                 ? ["Gold Market", "Federal Reserve", "US Dollar", "US Treasury", "Inflation", "Geopolitics"]
                 : ["黄金市场", "美联储", "美元", "美债", "通胀", "地缘政治"]
               ).map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
@@ -720,7 +724,7 @@ function EventSupplementForm({
         </div>
       </div>
       <Button type="submit" className="h-9 text-xs font-semibold w-full mt-1.5" disabled={submitting}>
-        {submitting ? <Loader size={14} className="spin mr-1" /> : <Plus size={14} className="mr-1" />} {t("resolvedLanguage") === "en-US" ? "Save Event" : "写入事件"}
+        {submitting ? <Loader size={14} className="spin mr-1" /> : <Plus size={14} className="mr-1" />} {preferences.language === "en-US" ? "Save Event" : "写入事件"}
       </Button>
     </form>
   );
@@ -734,6 +738,7 @@ function EventLogManager({
   onDelete: (id: string) => void;
 }) {
   const { t } = useTranslation();
+  const preferences = usePreferences();
   if (!events.length) {
     return <div className="flex items-center justify-center p-8 bg-background border border-border rounded-lg text-muted-foreground text-xs">{t("noData")}</div>;
   }
@@ -790,7 +795,7 @@ function EventLogManager({
           ))}
         </tbody>
       </table>
-      {events.length > 30 && <p className="m-0 p-2.5 text-muted-foreground border-t border-border text-center text-xs bg-muted/10">{t("resolvedLanguage") === "en-US" ? `Showing latest 30 of ${events.length} events` : `仅展示最新 30 条，共 ${events.length} 条事件`}</p>}
+      {events.length > 30 && <p className="m-0 p-2.5 text-muted-foreground border-t border-border text-center text-xs bg-muted/10">{preferences.language === "en-US" ? `Showing latest 30 of ${events.length} events` : `仅展示最新 30 条，共 ${events.length} 条事件`}</p>}
     </div>
   );
 }

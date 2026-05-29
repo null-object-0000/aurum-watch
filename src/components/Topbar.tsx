@@ -1,12 +1,11 @@
 import React from "react";
-import { BarChart3, Database, Languages, ListChecks, Menu, Monitor, Moon, Settings, Sun, X } from "lucide-react";
+import { BarChart3, Database, Languages, ListChecks, Menu, Moon, Settings, Sun, X } from "lucide-react";
 import { formatClock } from "../utils/format";
 import type { DashboardPayload } from "../types";
-import { usePreferences, type LanguagePreference, type ThemePreference } from "../preferences";
+import { usePreferences } from "../preferences";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 export type AppRoute = "dashboard" | "data" | "tasks" | "settings";
@@ -39,12 +38,6 @@ export function Topbar({ data, activeTab, initialized, onTabChange }: TopbarProp
     setMenuOpen(false);
     onTabChange(route);
   }
-
-  const themeIcon = preferences.theme === "dark"
-    ? <Moon size={15} />
-    : preferences.theme === "light"
-      ? <Sun size={15} />
-      : <Monitor size={15} />;
 
   return (
     <header className="topbar">
@@ -79,38 +72,30 @@ export function Topbar({ data, activeTab, initialized, onTabChange }: TopbarProp
       <div className="topbar-right">
         <b className={data ? "dot ok" : "dot error"} />
         <strong>{formatClock(now)}</strong>
-        <div className="topbar-select-control" title={t("theme")}>
-          <span className="topbar-select-icon">{themeIcon}</span>
-          <Select
-            value={preferences.theme}
-            onValueChange={(value) => preferences.setTheme(value as ThemePreference)}
-          >
-            <SelectTrigger aria-label={t("theme")} className="h-8 w-auto min-w-[78px] border-0 bg-transparent px-1 shadow-none focus:ring-0">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="system">{t("system")}</SelectItem>
-              <SelectItem value="dark">{t("dark")}</SelectItem>
-              <SelectItem value="light">{t("light")}</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="topbar-select-control" title={t("language")}>
-          <span className="topbar-select-icon"><Languages size={15} /></span>
-          <Select
-            value={preferences.language}
-            onValueChange={(value) => preferences.setLanguage(value as LanguagePreference)}
-          >
-            <SelectTrigger aria-label={t("language")} className="h-8 w-auto min-w-[78px] border-0 bg-transparent px-1 shadow-none focus:ring-0">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="system">{t("system")}</SelectItem>
-              <SelectItem value="zh-CN">{t("zh-CN")}</SelectItem>
-              <SelectItem value="en-US">{t("en-US")}</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+        <Button
+          variant="outline"
+          size="compactIcon"
+          className="h-8 w-8 border-border text-muted-foreground hover:text-foreground"
+          disabled={!initialized}
+          onClick={() => preferences.setTheme(preferences.theme === "dark" ? "light" : "dark")}
+          title={preferences.theme === "dark" ? t("light") : t("dark")}
+          aria-label={t("theme")}
+          type="button"
+        >
+          {preferences.theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+        </Button>
+        <Button
+          variant="outline"
+          size="compactIcon"
+          className="h-8 w-8 border-border text-muted-foreground hover:text-foreground"
+          disabled={!initialized}
+          onClick={() => preferences.setLanguage(preferences.language === "zh-CN" ? "en-US" : "zh-CN")}
+          title={preferences.language === "zh-CN" ? "English" : "中文"}
+          aria-label={t("language")}
+          type="button"
+        >
+          <Languages size={15} />
+        </Button>
         <Button
           className="topbar-menu-btn"
           variant="secondary"
