@@ -1098,7 +1098,13 @@ function quoteFromStreamPrice(price: OandaStreamPrice): Quote {
     ? previous.value - previous.change
     : previous?.value ?? null;
   const change = baseline !== null ? price.price - baseline : null;
-  const sparkline = [...(previous?.sparkline ?? []), price.price].slice(-120);
+  let sparkline = previous?.sparkline ?? [];
+  if (sparkline.length > 0) {
+    sparkline = [...sparkline];
+    sparkline[sparkline.length - 1] = price.price;
+  } else {
+    sparkline = [price.price];
+  }
 
   return {
     symbol: price.instrument,

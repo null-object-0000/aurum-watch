@@ -38,7 +38,7 @@ const NEWS_FAILURE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cool-off on failur
 
 // ─── Fetch ────────────────────────────────────────────────────────────────
 
-function fetchWithProxy(urlStr: string, timeoutMs = 10000): Promise<string> {
+function fetchWithProxy(urlStr: string, timeoutMs = 30000): Promise<string> {
   return new Promise((resolve, reject) => {
     let resolvedOrRejected = false;
     let activeReq: any = null;
@@ -290,13 +290,33 @@ function guessCategory(title: string): string {
   return "宏观经济";
 }
 
+function parseNewsDate(val: string | undefined): string {
+  if (!val) return new Date().toISOString();
+  let str = String(val).trim();
+  
+  // Check if it's a Unix timestamp (seconds or milliseconds)
+  if (/^\d+$/.test(str)) {
+    const num = Number(str);
+    const ms = num < 50000000000 ? num * 1000 : num;
+    return new Date(ms).toISOString();
+  }
+
+  // If timezone-less, parse as Beijing Time (+08:00)
+  if (!str.endsWith("Z") && !/[+-]\d{2}(:?\d{2})?$/.test(str)) {
+    str = str.replace(" ", "T") + "+08:00";
+  }
+
+  const date = new Date(str);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : new Date().toISOString();
+}
+
 function toEventRaw(item: NewsNowItem, sourceName: string): NewsEvent {
   const title = item.title.trim();
   const category = guessCategory(title);
 
   return {
     id: crypto.createHash("sha1").update(item.url || title).digest("hex"),
-    time: new Date(item.pubDate || item.time || Date.now()).toISOString(),
+    time: parseNewsDate(item.pubDate || item.time),
     source: sourceName,
     title,
     category,

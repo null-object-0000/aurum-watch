@@ -1,5 +1,6 @@
 import { config, oandaBaseUrl, oandaStreamUrl } from "../config.js";
 import type { CandlePoint, Health, Quote } from "../types.js";
+import { getQuote } from "../db.js";
 
 type OandaPrice = {
   instrument: string;
@@ -29,7 +30,7 @@ const headers = () => ({
   "Content-Type": "application/json"
 });
 
-async function fetchWithTimeout(url: string | URL, init?: RequestInit, timeoutMs = 10000): Promise<Response> {
+async function fetchWithTimeout(url: string | URL, init?: RequestInit, timeoutMs = 30000): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   if (init?.signal) {
@@ -109,11 +110,20 @@ export async function fetchOandaQuotes(): Promise<{ quotes: Quote[]; candles: Ca
     return { quotes: [xauQuote, cnhQuote], candles, status: "ok", detail: `OANDA connected (${accountId})` };
   } catch (error) {
     const message = error instanceof Error ? error.message : "OANDA request failed";
+    
+    const xauCached = getQuote("XAU_USD");
+    const cnhCached = getQuote("USD_CNH");
+
+    const xauQuote = xauCached
+      ? { ...xauCached, status: "error" as const, error: message }
+      : { ...unavailable("XAU_USD", "XAU/USD", "USD/oz", message), status: "error" as const };
+
+    const cnhQuote = cnhCached
+      ? { ...cnhCached, status: "error" as const, error: message }
+      : { ...unavailable("USD_CNH", "USD/CNH", "rate", message), status: "error" as const };
+
     return {
-      quotes: [
-        { ...unavailable("XAU_USD", "XAU/USD", "USD/oz", message), status: "error" },
-        { ...unavailable("USD_CNH", "USD/CNH", "rate", message), status: "error" }
-      ],
+      quotes: [xauQuote, cnhQuote],
       candles: [],
       status: "error",
       detail: message

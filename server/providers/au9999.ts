@@ -26,7 +26,7 @@ async function fetchFromAktools(): Promise<Quote> {
   url.searchParams.set("symbol", config.aktoolsAu9999Symbol);
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
 
   try {
     const response = await fetch(url, { 
