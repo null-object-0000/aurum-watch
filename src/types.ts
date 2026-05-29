@@ -34,6 +34,28 @@ export interface NewsEvent {
   impact: number;
   summary: string;
   url?: string;
+  llmImpactScore?: number | null;
+  llmAnalyzed?: boolean;
+}
+
+export interface TechnicalIndicators {
+  ema5: number | null;
+  ema20: number | null;
+  ema60: number | null;
+  rsi14: number | null;
+  macd: {
+    macdLine: number;
+    signalLine: number;
+    histogram: number;
+  } | null;
+  dataPoints: number;
+}
+
+export interface FactorBreakdown {
+  technical: number;
+  premium: number;
+  sentiment: number;
+  weights: { technical: number; premium: number; sentiment: number };
 }
 
 export interface DashboardPayload {
@@ -53,9 +75,11 @@ export interface DashboardPayload {
     score: number;
     confidence: number;
     probabilities: { bullish: number; neutral: number; bearish: number };
+    factorBreakdown?: FactorBreakdown;
   }>;
   explanation: string[];
   conclusion: string;
   sources: Array<{ name: string; status: Health; detail: string }>;
   updatedAt: string;
+  technicalIndicators?: TechnicalIndicators;
 }

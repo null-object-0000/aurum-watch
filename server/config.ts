@@ -11,7 +11,12 @@ export const config = {
   aktoolsBaseUrl: process.env.AKTOOLS_BASE_URL ?? "",
   aktoolsAu9999Symbol: process.env.AKTOOLS_AU9999_SYMBOL ?? "Au99.99",
   aktoolsRefreshIntervalMs: Number(process.env.AKTOOLS_REFRESH_INTERVAL_MS ?? 10000),
-  newsnowBaseUrl: process.env.NEWSNOW_BASE_URL ?? "https://newsnow.busiyi.world"
+  newsnowBaseUrl: process.env.NEWSNOW_BASE_URL ?? "https://newsnow.busiyi.world",
+  // LLM 智能分析配置（支持 DeepSeek / OpenAI / Gemini 等兼容接口）
+  llmApiKey: process.env.LLM_API_KEY ?? "",
+  llmBaseUrl: process.env.LLM_BASE_URL ?? "https://api.deepseek.com",
+  llmModel: process.env.LLM_MODEL ?? "deepseek-chat",
+  llmAnalysisIntervalMs: Number(process.env.LLM_ANALYSIS_INTERVAL_MS ?? 900000)
 };
 
 export const oandaBaseUrl =

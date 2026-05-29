@@ -38,6 +38,7 @@ import {
 } from "./db.js";
 import { fetchAu9999 } from "./providers/au9999.js";
 import { fetchNewsEvents } from "./providers/news.js";
+import { runLlmAnalysis, getLlmTaskState, isLlmConfigured } from "./providers/llm.js";
 import {
   fetchOandaQuotes,
   fetchOandaCandles,
@@ -96,7 +97,8 @@ const realtimeTaskState: Record<string, TaskRuntimeState> = {
 
 const scheduledTaskState: Record<string, TaskRuntimeState> = {
   fullRefresh: createTaskState("idle"),
-  minuteAggregation: createTaskState("idle")
+  minuteAggregation: createTaskState("idle"),
+  llmAnalysis: createTaskState("idle")
 };
 
 let lastOandaStreamPriceAt: string | null = null;

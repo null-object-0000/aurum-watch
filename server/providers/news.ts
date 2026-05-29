@@ -4,6 +4,7 @@ import https from "node:https";
 import { URL } from "node:url";
 import { config } from "../config.js";
 import type { Direction, NewsEvent } from "../types.js";
+import { analyzeNewsItems, isLlmConfigured } from "./llm.js";
 
 type NewsNowItem = {
   id: string;
@@ -24,15 +25,21 @@ const targetSources: NewsNowSource[] = [
   { id: "cls-telegraph", name: "财联社" }
 ];
 
+// ─── 关键词降级方案（LLM 未配置或失败时使用）─────────────────────────────
+
 const keywords = ["金", "美联储", "降息", "加息", "利率", "通胀", "CPI", "美元", "汇率", "人民币", "非农", "就业", "美债", "避险", "战争", "冲突"];
 
 const bullishTerms = ["避险", "战争", "降息", "地缘", "冲突", "买入", "通胀", "宽松", "上行", "支撑"];
 const bearishTerms = ["加息", "收紧", "鹰派", "下跌", "利空", "强劲", "打压", "美联储维持"];
 
+// ─── Cache ────────────────────────────────────────────────────────────────
+
 let lastFetchTime = 0;
 let cachedResult: { events: NewsEvent[]; status: "ok" | "error"; detail: string } | null = null;
 const NEWS_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const NEWS_FAILURE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cool-off on failure
+
+// ─── Fetch ────────────────────────────────────────────────────────────────
 
 function fetchWithProxy(urlStr: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -146,9 +153,9 @@ export async function fetchNewsEvents(force = false): Promise<{ events: NewsEven
             keywords.some((kw) => item.title.includes(kw))
           );
 
-          // Map items to NewsEvents
+          // Map items to NewsEvents (preliminary, direction/category assigned by keyword fallback)
           for (const item of filtered) {
-            allFetchedEvents.push(toEvent(item, source.name));
+            allFetchedEvents.push(toEventKeyword(item, source.name));
           }
         } catch (err) {
           fetchErrors.push(`${source.id}: ${err instanceof Error ? err.message : "Unknown error"}`);
@@ -179,11 +186,40 @@ export async function fetchNewsEvents(force = false): Promise<{ events: NewsEven
     // Keep the top 20 most recent events
     const events = uniqueEvents.slice(0, 20);
 
-    cachedResult = {
-      events,
-      status: "ok",
-      detail: `${events.length} articles from NewsNow (${targetSources.map(s => s.id).join(", ")})`
-    };
+    // ── LLM 增强（若已配置）─────────────────────────────────────────────
+    if (isLlmConfigured()) {
+      try {
+        const llmResults = await analyzeNewsItems(
+          events.map((e) => ({ id: e.id, title: e.title }))
+        );
+        for (const event of events) {
+          const result = llmResults.get(event.id);
+          if (result) {
+            event.category = result.category;
+            event.direction = result.direction;
+            event.impact = result.direction === "bullish"
+              ? result.impactScore
+              : result.direction === "bearish"
+                ? -result.impactScore
+                : 0;
+            event.summary = result.summary || event.title;
+            event.llmImpactScore = result.impactScore;
+            event.llmAnalyzed = true;
+          }
+        }
+      } catch (llmErr) {
+        // LLM 失败不影响新闻抓取，降级使用关键词方案
+        console.warn("[News] LLM analysis failed, using keyword fallback:", llmErr instanceof Error ? llmErr.message : llmErr);
+      }
+    }
+    // ────────────────────────────────────────────────────────────────────
+
+    const llmCount = events.filter((e) => e.llmAnalyzed).length;
+    const detail = llmCount > 0
+      ? `${events.length} articles (${llmCount} LLM-analyzed)`
+      : `${events.length} articles from NewsNow (keyword mode)`;
+
+    cachedResult = { events, status: "ok", detail };
     lastFetchTime = now;
     return cachedResult;
   } catch (error) {
@@ -194,7 +230,9 @@ export async function fetchNewsEvents(force = false): Promise<{ events: NewsEven
   }
 }
 
-function toEvent(item: NewsNowItem, sourceName: string): NewsEvent {
+// ─── 关键词方案（降级用）─────────────────────────────────────────────────
+
+function toEventKeyword(item: NewsNowItem, sourceName: string): NewsEvent {
   const title = item.title.trim();
   const lower = title.toLowerCase();
   const dir = getDirection(lower);
@@ -210,7 +248,8 @@ function toEvent(item: NewsNowItem, sourceName: string): NewsEvent {
     direction: dir,
     impact: Math.max(-100, Math.min(100, impact)),
     summary: title,
-    url: item.url
+    url: item.url,
+    llmAnalyzed: false
   };
 }
 
