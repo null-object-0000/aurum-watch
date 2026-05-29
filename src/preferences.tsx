@@ -1,4 +1,5 @@
 import React from "react";
+import i18n from "i18next";
 
 export type ThemePreference = "system" | "dark" | "light";
 export type LanguagePreference = "system" | "zh-CN" | "en-US";
@@ -13,26 +14,10 @@ export interface Preferences {
   setTheme: (theme: ThemePreference) => void;
   setLanguage: (language: LanguagePreference) => void;
   setMarketColors: (marketColors: MarketColorPreference) => void;
-  t: (key: string) => string;
+  t: (key: string, options?: any) => string;
 }
 
 const STORAGE_KEY = "aurum-watch-preferences";
-
-const dictionary: Record<string, Record<"zh-CN" | "en-US", string>> = {
-  settings: { "zh-CN": "系统设置", "en-US": "Settings" },
-  dashboard: { "zh-CN": "返回看板", "en-US": "Back to dashboard" },
-  brandSubtitle: { "zh-CN": "舆情洞察 · 影响预测", "en-US": "Sentiment intelligence · impact forecast" },
-  dataManagement: { "zh-CN": "数据管理", "en-US": "Data Management" },
-  preferences: { "zh-CN": "显示偏好", "en-US": "Display Preferences" },
-  theme: { "zh-CN": "主题", "en-US": "Theme" },
-  language: { "zh-CN": "语言", "en-US": "Language" },
-  marketColors: { "zh-CN": "涨跌颜色", "en-US": "Market Colors" },
-  system: { "zh-CN": "跟随系统", "en-US": "System" },
-  dark: { "zh-CN": "深色", "en-US": "Dark" },
-  light: { "zh-CN": "浅色", "en-US": "Light" },
-  redUp: { "zh-CN": "红涨绿跌", "en-US": "Red up, green down" },
-  greenUp: { "zh-CN": "绿涨红跌", "en-US": "Green up, red down" }
-};
 
 const PreferencesContext = React.createContext<Preferences | null>(null);
 
@@ -57,6 +42,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     document.documentElement.dataset.theme = resolvedTheme;
     document.documentElement.dataset.marketColors = marketColors;
     document.documentElement.lang = resolvedLanguage;
+    i18n.changeLanguage(resolvedLanguage);
   }, [resolvedTheme, resolvedLanguage, marketColors]);
 
   function persist(next: Partial<StoredPreferences>) {
@@ -89,7 +75,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     setTheme,
     setLanguage,
     setMarketColors,
-    t: (key) => dictionary[key]?.[resolvedLanguage] ?? key
+    t: (key, options) => i18n.t(key, options) as string
   };
 
   return <PreferencesContext.Provider value={value}>{children}</PreferencesContext.Provider>;

@@ -1,29 +1,28 @@
 :root {
   color-scheme: dark;
   font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  background: #080b10;
-  color: #d8dee7;
-  --up-color: #d94b55;
-  --down-color: #31b978;
+  background: var(--background);
+  color: var(--foreground);
+  --up-color: var(--destructive);
+  --down-color: var(--success);
 }
 
 :root[data-market-colors="green-up"] {
-  --up-color: #31b978;
-  --down-color: #d94b55;
+  --up-color: var(--success);
+  --down-color: var(--destructive);
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  background: #eef2f7;
-  color: #172033;
+  background: var(--background);
+  color: var(--foreground);
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; background: #080b10; }
-:root[data-theme="light"] body { background: #eef2f7; color: #172033; }
+body { margin: 0; min-width: 320px; background: var(--background); color: var(--foreground); }
 button, input { font: inherit; }
 button { cursor: pointer; }
 
 .green { color: var(--down-color) !important; }
 .red { color: var(--up-color) !important; }
-.empty-state, .loading { min-height: 180px; display: grid; place-items: center; color: #7e8998; text-align: center; }
+.empty-state, .loading { min-height: 180px; display: grid; place-items: center; color: var(--muted-foreground); text-align: center; }

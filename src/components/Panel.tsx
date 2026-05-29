@@ -1,4 +1,5 @@
 import type { PropsWithChildren } from "react";
+import { Button } from "@/components/ui/button";
 
 interface PanelProps {
   title: string;
@@ -12,7 +13,7 @@ export function Panel({ title, hint, action, className = "", children }: PropsWi
     <section className={`panel ${className}`}>
       <header>
         <h2>{title} {hint && <span>{hint}</span>}</h2>
-        {action && <button>{action}</button>}
+        {action && <Button variant="ghost" size="sm">{action}</Button>}
       </header>
       {children}
     </section>

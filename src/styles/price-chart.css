@@ -3,13 +3,13 @@
 .chart-shell > header { margin-bottom: 6px; }
 .price-module { display: grid; gap: 8px; }
 .chart-toolbar { min-height: 34px; padding-right: 310px; }
-.chart-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; color: #b9c2cf; font-size: 13px; }
+.chart-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; color: var(--foreground); font-size: 13px; }
 .chart-legend span { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .chart-legend i { width: 14px; height: 4px; border-radius: 999px; display: inline-block; }
-.chart-legend .chart-granularity { color: #7f8a99; font-size: 12px; font-weight: 650; }
-.legend-xau { background: #d3a72d; }
-.legend-au { background: #328bd8; }
-.legend-event { background: #8c5bd6; }
+.chart-legend .chart-granularity { color: var(--muted-foreground); font-size: 12px; font-weight: 650; }
+.legend-xau { background: var(--chart-gold); }
+.legend-au { background: var(--chart-blue); }
+.legend-event { background: var(--chart-event); }
 .chart-controls {
   position: absolute;
   top: 12px;
@@ -17,8 +17,8 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  background: #151d28;
-  border: 1px solid #252f3b;
+  background: var(--secondary);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 2px;
 }
@@ -26,19 +26,16 @@
 .chart-controls button {
   min-width: 34px;
   height: 26px;
-  border: 0;
   border-radius: 4px;
-  color: #b6bfcc;
-  background: transparent;
-  font-weight: 650;
+  font-weight: 700;
 }
-.chart-controls button.active { color: #f2c23a; background: rgba(211, 167, 45, .22); }
+.chart-controls button.active { color: var(--warning); background: color-mix(in srgb, var(--warning) 16%, transparent); }
 .price-chart { min-height: 230px; }
-.sentiment-chart-title { color: #aeb8c6; font-size: 13px; font-weight: 650; margin: 4px 0 -4px 28px; }
+.sentiment-chart-title { color: var(--muted-foreground); font-size: 13px; font-weight: 650; margin: 4px 0 -4px 28px; }
 .sentiment-chart { min-height: 122px; }
-.sentiment-axis-labels { display: grid; grid-template-columns: repeat(3, 1fr); color: #aeb8c6; font-size: 13px; font-weight: 700; padding: 0 28px 4px; }
+.sentiment-axis-labels { display: grid; grid-template-columns: repeat(3, 1fr); color: var(--muted-foreground); font-size: 13px; font-weight: 700; padding: 0 28px 4px; }
 .sentiment-axis-labels span:nth-child(2) { text-align: center; }
 .sentiment-axis-labels span:nth-child(3) { text-align: right; }
-.chart-attribution { color: #778393; font-size: 11px; padding: 0 28px 2px; }
-.chart-attribution a { color: #9eb8e8; text-decoration: none; }
+.chart-attribution { color: var(--muted-foreground); font-size: 11px; padding: 0 28px 2px; }
+.chart-attribution a { color: var(--primary); text-decoration: none; }
 .chart-attribution a:hover { text-decoration: underline; }

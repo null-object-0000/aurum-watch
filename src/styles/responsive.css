@@ -1,5 +1,4 @@
 @media (max-width: 1180px) {
-  .topbar { grid-template-columns: 1fr auto; }
   .metric-grid, .content-grid { grid-template-columns: 1fr 1fr; }
   .chart-panel { grid-column: span 2; }
   .chart-toolbar { padding-right: 310px; }
@@ -7,8 +6,35 @@
 
 @media (max-width: 720px) {
   .main { padding: 0 12px 18px; }
-  .topbar { position: static; grid-template-columns: 1fr; padding: 12px; }
-  .topbar-right { flex-wrap: wrap; }
+  .topbar { position: static; grid-template-columns: 1fr auto; padding: 12px; }
+  .brand { min-width: 0; }
+  .topbar-nav {
+    display: none;
+    grid-column: 1 / -1;
+    width: 100%;
+    padding: 8px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .topbar-nav.open {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .topbar-right { gap: 9px; }
+  .topbar-right > strong { display: none; }
+  .topbar-select-control {
+    width: 34px;
+    justify-content: center;
+    padding: 0;
+  }
+  .topbar-select-control [role="combobox"] {
+    position: absolute;
+    inset: 0;
+    width: 34px;
+    opacity: 0;
+  }
+  .topbar-menu-btn { display: grid; }
   .metric-grid, .content-grid { grid-template-columns: 1fr; }
   .chart-panel { grid-column: auto; }
   .chart-toolbar { padding-right: 0; padding-top: 36px; }

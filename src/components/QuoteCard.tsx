@@ -2,21 +2,28 @@ import { Info, AlertCircle } from "lucide-react";
 import type { Quote } from "../types";
 import { formatPct, formatQuoteValue, formatSigned } from "../utils/format";
 import { marketTone, quoteMeta } from "../utils/market";
+import { useTranslation } from "react-i18next";
 
 interface QuoteCardProps {
   quote?: Quote;
 }
 
 export function QuoteCard({ quote }: QuoteCardProps) {
+  const { t } = useTranslation();
   const meta = quoteMeta(quote?.symbol);
   const tone = marketTone(quote?.change);
+
+  const title = t(`quote_${quote?.symbol}_title`, meta.title ?? "");
+  const subtitle = t(`quote_${quote?.symbol}_subtitle`, meta.subtitle ?? "");
+  const description = t(`quote_${quote?.symbol}_desc`, meta.description ?? "");
+  const sourceLabel = t(`quote_${quote?.symbol}_source`, meta.sourceLabel ?? quote?.source ?? "");
 
   const getStatus = () => {
     const hasError = Boolean(quote?.error);
 
     if (!quote?.updatedAt) {
       return {
-        text: "无历史序列",
+        text: t("noHistorySeries"),
         isStale: false,
         isError: hasError,
         tooltip: quote?.error || undefined
@@ -26,7 +33,7 @@ export function QuoteCard({ quote }: QuoteCardProps) {
     const date = new Date(quote.updatedAt);
     if (!Number.isFinite(date.getTime())) {
       return {
-        text: "无历史序列",
+        text: t("noHistorySeries"),
         isStale: false,
         isError: hasError,
         tooltip: quote?.error || undefined
@@ -46,7 +53,7 @@ export function QuoteCard({ quote }: QuoteCardProps) {
       text: formattedTime,
       isStale: !hasError && isStale,
       isError: hasError,
-      tooltip: quote?.error || (isStale ? "数据非实时 (延迟)" : undefined)
+      tooltip: quote?.error || (isStale ? t("dataNotRealtime") : undefined)
     };
   };
 
@@ -57,17 +64,17 @@ export function QuoteCard({ quote }: QuoteCardProps) {
       <div className="metric-copy">
         <div className="card-title">
           <div>
-            <h3>{meta.title}</h3>
-            <span>{meta.subtitle}</span>
+            <h3>{title}</h3>
+            <span>{subtitle}</span>
           </div>
         </div>
         <strong className={tone}>{formatQuoteValue(quote)}</strong>
         <p className={tone}>
           {formatSigned(quote?.change, quote?.symbol)} <span>{formatPct(quote?.changePct, quote?.symbol)}</span>
         </p>
-        <small>{meta.sourceLabel ?? quote?.source}</small>
+        <small>{sourceLabel}</small>
       </div>
-      <div className="metric-info" title={meta.description}>
+      <div className="metric-info" title={description}>
         <Info size={14} />
       </div>
       <div className="metric-trend">

@@ -2,6 +2,7 @@ import React from "react";
 import { createChart, createSeriesMarkers, ColorType, HistogramSeries, LineSeries } from "lightweight-charts";
 import type { CandlePoint, TimeRange } from "../types";
 import { chartTickTime, chartTime, chartTooltipTime } from "../utils/format";
+import { Button } from "@/components/ui/button";
 
 interface PriceChartProps {
   candles: CandlePoint[];
@@ -41,32 +42,33 @@ export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChart
     if (!priceRef.current || !sentimentRef.current) return;
     priceRef.current.innerHTML = "";
     sentimentRef.current.innerHTML = "";
+    const theme = chartTheme();
 
     const priceChart = createChart(priceRef.current, {
       height: 230,
-      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#8b96a6", attributionLogo: false },
-      grid: { vertLines: { color: "#202a35" }, horzLines: { color: "#202a35" } },
+      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: theme.muted, attributionLogo: false },
+      grid: { vertLines: { color: theme.grid }, horzLines: { color: theme.grid } },
       localization: { timeFormatter: (time: unknown) => chartTooltipTime(Number(time)) },
-      rightPriceScale: { borderColor: "#303a48" },
+      rightPriceScale: { borderColor: theme.border },
       timeScale: {
-        borderColor: "#303a48",
+        borderColor: theme.border,
         visible: true,
         timeVisible: true,
         secondsVisible: false,
         tickMarkFormatter: (time: unknown) => chartTickTime(Number(time), range)
       }
     });
-    const xauLine = priceChart.addSeries(LineSeries, { color: "#d3a72d", lineWidth: 2 });
+    const xauLine = priceChart.addSeries(LineSeries, { color: theme.gold, lineWidth: 2 });
 
     const sentimentChart = createChart(sentimentRef.current, {
       height: 122,
-      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#8b96a6", attributionLogo: false },
-      grid: { vertLines: { color: "#202a35" }, horzLines: { color: "#202a35" } },
+      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: theme.muted, attributionLogo: false },
+      grid: { vertLines: { color: theme.grid }, horzLines: { color: theme.grid } },
       localization: { timeFormatter: (time: unknown) => chartTooltipTime(Number(time)) },
       rightPriceScale: { visible: false },
-      leftPriceScale: { visible: true, borderColor: "#303a48" },
+      leftPriceScale: { visible: true, borderColor: theme.border },
       timeScale: {
-        borderColor: "#303a48",
+        borderColor: theme.border,
         visible: true,
         timeVisible: true,
         secondsVisible: false,
@@ -114,7 +116,7 @@ export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChart
     const auSeries = showAuLine ? visibleCandles.filter((c) => c.au9999 !== null) : [];
     if (showAuLine && auSeries.length) {
       if (!instances.auLine) {
-        instances.auLine = priceChart.addSeries(LineSeries, { color: "#328bd8", lineWidth: 2, priceScaleId: "right" });
+        instances.auLine = priceChart.addSeries(LineSeries, { color: cssVar("--chart-blue", "#328bd8"), lineWidth: 2, priceScaleId: "right" });
       }
       const auData = auSeries.map((c) => ({ time: chartTime(c.time), value: c.au9999! }));
       instances.auLine.setData(auData);
@@ -128,11 +130,12 @@ export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChart
     const rootStyles = getComputedStyle(document.documentElement);
     const upColor = rootStyles.getPropertyValue("--up-color").trim() || "#d94b55";
     const downColor = rootStyles.getPropertyValue("--down-color").trim() || "#31b978";
+    const neutralColor = rootStyles.getPropertyValue("--neutral").trim() || "#6d7683";
 
     const barsData = visibleCandles.map((c) => ({
       time: chartTime(c.time),
       value: c.sentiment,
-      color: c.sentiment > 0 ? upColor : c.sentiment < 0 ? downColor : "#6d7683"
+      color: c.sentiment > 0 ? upColor : c.sentiment < 0 ? downColor : neutralColor
     }));
     bars.setData(barsData);
 
@@ -153,11 +156,27 @@ export function PriceChart({ candles, fxRate, range, onRangeChange }: PriceChart
         </div>
         <div className="chart-controls">
           {(["1H", "4H", "1D", "7D", "30D"] as TimeRange[]).map((item) => (
-            <button className={item === range ? "active" : ""} key={item} onClick={() => onRangeChange(item)}>{item}</button>
+            <Button
+              key={item}
+              variant={item === range ? "secondary" : "ghost"}
+              size="sm"
+              className={item === range ? "active" : ""}
+              onClick={() => onRangeChange(item)}
+            >
+              {item}
+            </Button>
           ))}
           <span />
           {(["USD", "CNY"] as PriceUnit[]).map((item) => (
-            <button className={item === unit ? "active" : ""} key={item} onClick={() => setUnit(item)}>{item}</button>
+            <Button
+              key={item}
+              variant={item === unit ? "secondary" : "ghost"}
+              size="sm"
+              className={item === unit ? "active" : ""}
+              onClick={() => setUnit(item)}
+            >
+              {item}
+            </Button>
           ))}
         </div>
       </div>
@@ -189,8 +208,24 @@ function eventMarkers(candles: CandlePoint[]) {
     .map((candle, index) => ({
       time: chartTime(candle.time),
       position: candle.sentiment > 0 ? "aboveBar" as const : "belowBar" as const,
-      color: "#8c5bd6",
+      color: cssVar("--chart-event", "#8c5bd6"),
       shape: "circle" as const,
       text: String.fromCharCode(65 + index)
     }));
+}
+
+function cssVar(name: string, fallback: string) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
+function chartTheme() {
+  const root = getComputedStyle(document.documentElement);
+  const border = root.getPropertyValue("--border").trim() || "#303a48";
+  const muted = root.getPropertyValue("--muted-foreground").trim() || "#8b96a6";
+  return {
+    border,
+    muted,
+    grid: border,
+    gold: root.getPropertyValue("--chart-gold").trim() || "#d3a72d"
+  };
 }

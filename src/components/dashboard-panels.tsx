@@ -2,13 +2,13 @@ import React from "react";
 import { Shield } from "lucide-react";
 import * as echarts from "echarts";
 import type { DashboardPayload, NewsEvent } from "../types";
-import { directionText, directionTone, marketTone, statusLabel } from "../utils/market";
+import { directionTone, marketTone } from "../utils/market";
 import { usePreferences } from "../preferences";
+import { useTranslation } from "react-i18next";
 
 export function SentimentGauge({ data }: { data: DashboardPayload }) {
   const ref = React.useRef<HTMLDivElement>(null);
-  const { resolvedLanguage } = usePreferences();
-  const tr = (zh: string, en: string) => resolvedLanguage === "zh-CN" ? zh : en;
+  const { t } = useTranslation();
 
   React.useEffect(() => {
     if (!ref.current) return;
@@ -40,9 +40,9 @@ export function SentimentGauge({ data }: { data: DashboardPayload }) {
     <div>
       <div className="gauge" ref={ref} />
       <div className="sentiment-stats">
-        <span>{tr("利多强度", "Bullish")} <b className="red">+{data.sentiment.bullish}</b></span>
-        <span>{tr("利空强度", "Bearish")} <b className="green">{data.sentiment.bearish}</b></span>
-        <span>{tr("中性占比", "Neutral")} <b>{data.sentiment.neutralShare}%</b></span>
+        <span>{t("bullishStrength")} <b className="red">+{data.sentiment.bullish}</b></span>
+        <span>{t("bearishStrength")} <b className="green">{data.sentiment.bearish}</b></span>
+        <span>{t("neutralShare")} <b>{data.sentiment.neutralShare}%</b></span>
       </div>
       <div className="factor-list">
         {data.sentiment.factors.map((factor) => (
@@ -58,8 +58,8 @@ export function SentimentGauge({ data }: { data: DashboardPayload }) {
 }
 
 export function EventFeed({ events }: { events: NewsEvent[] }) {
-  const { resolvedLanguage } = usePreferences();
-  if (!events.length) return <div className="empty-state">{resolvedLanguage === "zh-CN" ? "GDELT 新闻源暂未返回事件。" : "No GDELT events yet."}</div>;
+  const { t } = useTranslation();
+  if (!events.length) return <div className="empty-state">{t("noEvents")}</div>;
 
   return (
     <div className="event-feed">
@@ -78,28 +78,40 @@ export function EventFeed({ events }: { events: NewsEvent[] }) {
 }
 
 export function Signal({ data }: { data: DashboardPayload }) {
+  const { t } = useTranslation();
   const { resolvedLanguage } = usePreferences();
-  const tr = (zh: string, en: string) => resolvedLanguage === "zh-CN" ? zh : en;
+  const shortTerm = t("direction_" + data.predictions[0]?.direction);
+  const mediumTerm = t("direction_" + data.predictions[3]?.direction);
+
   return (
     <div className="signal">
-      <h3 className={directionTone(data.predictions[0]?.direction)}>{directionText(data.predictions[0]?.direction)}，中期{directionText(data.predictions[3]?.direction)}</h3>
+      <h3 className={directionTone(data.predictions[0]?.direction)}>
+        {t("signalHeadline", { shortTerm, mediumTerm })}
+      </h3>
       <p>{data.conclusion}</p>
-      <small>{tr("更新时间", "Updated")}: {new Date(data.updatedAt).toLocaleString(resolvedLanguage, { hour12: false })}</small>
+      <small>{t("updatedTime")}: {new Date(data.updatedAt).toLocaleString(resolvedLanguage, { hour12: false })}</small>
     </div>
   );
 }
 
 export function PredictionTable({ data }: { data: DashboardPayload }) {
-  const { resolvedLanguage } = usePreferences();
-  const tr = (zh: string, en: string) => resolvedLanguage === "zh-CN" ? zh : en;
+  const { t } = useTranslation();
   return (
     <table className="prediction">
-      <thead><tr><th>{tr("周期", "Horizon")}</th><th>{tr("方向", "Bias")}</th><th>{tr("影响评分", "Score")}</th><th>{tr("置信度", "Confidence")}</th><th>{tr("概率分布", "Distribution")}</th></tr></thead>
+      <thead>
+        <tr>
+          <th>{t("horizon")}</th>
+          <th>{t("bias")}</th>
+          <th>{t("impactScore")}</th>
+          <th>{t("confidence")}</th>
+          <th>{t("probDistribution")}</th>
+        </tr>
+      </thead>
       <tbody>
         {data.predictions.map((row) => (
           <tr key={row.horizon}>
             <td>{row.horizon}</td>
-            <td className={directionTone(row.direction)}>{directionText(row.direction)}</td>
+            <td className={directionTone(row.direction)}>{t("direction_" + row.direction)}</td>
             <td>{row.score > 0 ? "+" : ""}{row.score}</td>
             <td>{row.confidence}%</td>
             <td><Probability probs={row.probabilities} /></td>
@@ -115,13 +127,14 @@ export function Explanation({ lines }: { lines: string[] }) {
 }
 
 export function SourceStatus({ sources }: { sources: DashboardPayload["sources"] }) {
+  const { t } = useTranslation();
   return (
     <div className="sources">
       {sources.map((source) => (
         <div key={source.name}>
           <span>{source.name}</span>
           <b className={`dot ${source.status}`} />
-          <strong>{statusLabel(source.status)}</strong>
+          <strong>{t("status_" + source.status)}</strong>
         </div>
       ))}
     </div>

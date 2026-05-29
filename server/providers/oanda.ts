@@ -1,4 +1,4 @@
-import { config, oandaBaseUrl } from "../config.js";
+import { config, oandaBaseUrl, oandaStreamUrl } from "../config.js";
 import type { CandlePoint, Health, Quote } from "../types.js";
 
 type OandaPrice = {
@@ -6,6 +6,12 @@ type OandaPrice = {
   time: string;
   closeoutBid: string;
   closeoutAsk: string;
+};
+
+export type OandaStreamPrice = {
+  instrument: "XAU_USD" | "USD_CNH";
+  price: number;
+  time: string;
 };
 
 type OandaCandle = {
@@ -111,6 +117,99 @@ async function getAccountId() {
 
   resolvedAccountId = accountId;
   return accountId;
+}
+
+export async function startOandaPricingStream({
+  onPrices,
+  onStatus,
+  signal
+}: {
+  onPrices: (prices: OandaStreamPrice[]) => void | Promise<void>;
+  onStatus?: (status: { state: "connecting" | "connected" | "error" | "stopped"; detail: string }) => void;
+  signal?: AbortSignal;
+}) {
+  if (!config.oandaToken) {
+    onStatus?.({ state: "stopped", detail: "OANDA token missing" });
+    return;
+  }
+
+  try {
+    onStatus?.({ state: "connecting", detail: "Connecting to OANDA pricing stream" });
+    const accountId = await getAccountId();
+    const url = `${oandaStreamUrl}/v3/accounts/${accountId}/pricing/stream?instruments=XAU_USD,USD_CNH`;
+    const response = await fetch(url, { headers: headers(), signal });
+    if (!response.ok || !response.body) {
+      throw new Error(`OANDA pricing stream ${response.status}`);
+    }
+
+    onStatus?.({ state: "connected", detail: `OANDA pricing stream connected (${accountId})` });
+    await readPricingStream(response.body, onPrices, signal);
+  } catch (error) {
+    if (!signal?.aborted) {
+      const detail = error instanceof Error ? error.message : "OANDA pricing stream failed";
+      if (detail.toLowerCase() === "terminated") {
+        onStatus?.({ state: "stopped", detail: "OANDA pricing stream terminated" });
+        return;
+      }
+      onStatus?.({ state: "error", detail });
+      return;
+    }
+  }
+
+  onStatus?.({ state: "stopped", detail: "OANDA pricing stream stopped" });
+}
+
+async function readPricingStream(
+  body: ReadableStream<Uint8Array>,
+  onPrices: (prices: OandaStreamPrice[]) => void | Promise<void>,
+  signal?: AbortSignal
+) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (!signal?.aborted) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      const prices = parseStreamLine(line);
+      if (prices.length) await onPrices(prices);
+    }
+  }
+}
+
+function parseStreamLine(line: string): OandaStreamPrice[] {
+  const trimmed = line.trim();
+  if (!trimmed) return [];
+
+  try {
+    const message = JSON.parse(trimmed) as {
+      type?: string;
+      instrument?: string;
+      time?: string;
+      closeoutBid?: string;
+      closeoutAsk?: string;
+    };
+    if (message.type !== "PRICE" || !isOandaStreamInstrument(message.instrument)) return [];
+    const bid = Number(message.closeoutBid);
+    const ask = Number(message.closeoutAsk);
+    if (!Number.isFinite(bid) || !Number.isFinite(ask)) return [];
+    return [{
+      instrument: message.instrument,
+      price: (bid + ask) / 2,
+      time: message.time ?? new Date().toISOString()
+    }];
+  } catch {
+    return [];
+  }
+}
+
+function isOandaStreamInstrument(value: unknown): value is OandaStreamPrice["instrument"] {
+  return value === "XAU_USD" || value === "USD_CNH";
 }
 
 export async function fetchOandaCandles(

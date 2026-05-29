@@ -1,20 +1,26 @@
 import React from "react";
 import type { DashboardPayload, TimeRange } from "./types";
-import { Dashboard } from "./components/Dashboard";
-import { Topbar } from "./components/Topbar";
+import { Dashboard } from "./pages/Dashboard";
+import { Topbar, type AppRoute } from "./components/Topbar";
 import { InitPortal } from "./components/InitPortal";
-import { Settings } from "./components/Settings";
+import { DataManagement } from "./pages/DataManagement";
+import { Tasks } from "./pages/Tasks";
+import { Settings } from "./pages/Settings";
+
+const DASHBOARD_SSE_REFRESH_THROTTLE_MS = 1000;
 
 // ─── Hash Router ──────────────────────────────────────────────────────────
 
-type Route = "dashboard" | "settings" | "init";
+type Route = AppRoute | "init";
 
-function getRouteFromHash(): "dashboard" | "settings" {
-  return window.location.hash.startsWith("#/settings") ? "settings" : "dashboard";
+function getRouteFromHash(): AppRoute {
+  const path = window.location.hash.replace(/^#\/?/, "");
+  if (path === "data" || path === "tasks" || path === "settings") return path;
+  return "dashboard";
 }
 
-function navigateTo(to: "dashboard" | "settings") {
-  window.location.hash = to === "settings" ? "#/settings" : "#/";
+function navigateTo(to: AppRoute) {
+  window.location.hash = to === "dashboard" ? "#/" : `#/${to}`;
 }
 
 export interface InitStatus {
@@ -76,12 +82,67 @@ export function App() {
       .catch(() => setRoute("dashboard"));
   }, []);
 
-  // ── Dashboard data ────────────────────────────────────────────────────
   React.useEffect(() => {
-    if ((route === "dashboard") && !data) {
-      loadDashboard().catch(console.error);
-    }
-  }, [route, data, loadDashboard]);
+    if (route !== "dashboard") return;
+
+    let eventSource: EventSource | null = null;
+    let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
+    let lastRefreshAt = 0;
+
+    const stopSse = () => {
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+    };
+
+    const scheduleRefresh = () => {
+      if (document.hidden || refreshTimeout) return;
+      const waitMs = Math.max(0, DASHBOARD_SSE_REFRESH_THROTTLE_MS - (Date.now() - lastRefreshAt));
+      refreshTimeout = setTimeout(() => {
+        refreshTimeout = null;
+        lastRefreshAt = Date.now();
+        loadDashboard().catch(console.error);
+      }, waitMs);
+    };
+
+    const startSse = () => {
+      if (eventSource || document.hidden) return;
+      eventSource = new EventSource("/api/stream");
+      eventSource.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === "update") scheduleRefresh();
+        } catch (err) {
+          console.error("SSE parse error:", err);
+        }
+      };
+      eventSource.onerror = stopSse;
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopSse();
+        if (refreshTimeout) {
+          clearTimeout(refreshTimeout);
+          refreshTimeout = null;
+        }
+      } else {
+        loadDashboard().catch(console.error);
+        startSse();
+      }
+    };
+
+    loadDashboard().catch(console.error);
+    startSse();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      stopSse();
+      if (refreshTimeout) clearTimeout(refreshTimeout);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [route, loadDashboard]);
 
   React.useEffect(() => {
     if (!data) return;
@@ -92,24 +153,8 @@ export function App() {
       .catch(console.error);
   }, [range, !data]);
 
-  // ── SSE stream ────────────────────────────────────────────────────────
-  React.useEffect(() => {
-    const eventSource = new EventSource("/api/stream");
-    eventSource.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        if (message.type === "update") {
-          loadDashboard().catch(console.error);
-        }
-      } catch (err) {
-        console.error("SSE parse error:", err);
-      }
-    };
-    return () => eventSource.close();
-  }, [loadDashboard]);
-
   // ── Navigation ────────────────────────────────────────────────────────
-  function handleTabChange(to: "dashboard" | "settings") {
+  function handleTabChange(to: AppRoute) {
     navigateTo(to);
     setRoute(to);
   }
@@ -137,15 +182,15 @@ export function App() {
     <div className="shell">
       <Topbar
         data={data}
-        activeTab={route as "dashboard" | "settings"}
+        activeTab={route}
         initialized={initStatus?.initialized ?? false}
         onTabChange={handleTabChange}
       />
       <main className="main">
-        {route === "settings"
-          ? <Settings />
-          : <Dashboard data={data} range={range} onRangeChange={setRange} />
-        }
+        {route === "data" && <DataManagement />}
+        {route === "tasks" && <Tasks />}
+        {route === "settings" && <Settings />}
+        {route === "dashboard" && <Dashboard data={data} range={range} onRangeChange={setRange} />}
       </main>
     </div>
   );

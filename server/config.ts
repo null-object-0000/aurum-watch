@@ -18,3 +18,8 @@ export const oandaBaseUrl =
   config.oandaEnv === "live"
     ? "https://api-fxtrade.oanda.com"
     : "https://api-fxpractice.oanda.com";
+
+export const oandaStreamUrl =
+  config.oandaEnv === "live"
+    ? "https://stream-fxtrade.oanda.com"
+    : "https://stream-fxpractice.oanda.com";

@@ -1,5 +1,9 @@
 import React from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+import { useTranslation } from "react-i18next";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -23,31 +27,21 @@ const SYMBOLS = [
   { id: "USD_CNH", label: "USD/CNH" }
 ];
 
-const MONTH_NAMES = ["1月","2月","3月","4月","5月","6月","7月","8月","9月","10月","11月","12月"];
-const DAY_LABELS  = ["一","二","三","四","五","六","日"];
-
 // ─── Coverage Color ────────────────────────────────────────────────────────
 
-function coverageColor(pct: number, isWeekend = false): string {
-  if (isWeekend) return "rgba(255,255,255,0.03)";
-  if (pct === 0)   return "rgba(255,255,255,0.04)";
-  if (pct < 25)    return "rgba(217,75,85,0.35)";
-  if (pct < 50)    return "rgba(217,75,85,0.6)";
-  if (pct < 75)    return "rgba(226,177,60,0.55)";
-  if (pct < 95)    return "rgba(49,185,120,0.45)";
-  return "rgba(49,185,120,0.85)";
-}
-
-function coverageBorder(pct: number): string {
-  if (pct === 0)   return "transparent";
-  if (pct < 25)    return "rgba(217,75,85,0.3)";
-  if (pct < 75)    return "rgba(226,177,60,0.3)";
-  return "rgba(49,185,120,0.3)";
+function coverageTone(pct: number, isWeekend = false): string {
+  if (isWeekend) return "bg-muted/60 border-transparent";
+  if (pct === 0) return "bg-muted/40 border-transparent";
+  if (pct < 50) return "bg-destructive/40 border-destructive/30 border";
+  if (pct < 75) return "bg-warning/45 border-warning/30 border";
+  if (pct < 95) return "bg-success/35 border-success/25 border";
+  return "bg-success/75 border-success/35 border";
 }
 
 // ─── Component ─────────────────────────────────────────────────────────────
 
 export function DataCoverageCalendar() {
+  const { t } = useTranslation();
   const [viewMode, setViewMode] = React.useState<ViewMode>("month");
   const [symbol, setSymbol] = React.useState("XAU_USD");
   const [year, setYear] = React.useState(new Date().getFullYear());
@@ -95,57 +89,61 @@ export function DataCoverageCalendar() {
   }
 
   const title = viewMode === "month"
-    ? `${year} 年 ${MONTH_NAMES[month - 1]}`
-    : `${year} 年`;
+    ? t("monthFormat", { year, month: t(`month_${month}`) })
+    : t("yearFormat", { year });
 
   return (
-    <div className="coverage-calendar">
+    <div className="bg-card border border-border rounded-lg p-3 flex flex-col gap-3">
       {/* Header */}
-      <div className="coverage-header">
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <select
-            className="form-select"
-            value={symbol}
-            onChange={(e) => setSymbol(e.target.value)}
-            style={{ width: "auto" }}
-          >
-            {SYMBOLS.map((s) => (
-              <option key={s.id} value={s.id}>{s.label}</option>
-            ))}
-          </select>
-          <div className="coverage-view-toggle">
-            <button
-              className={`coverage-view-btn${viewMode === "month" ? " active" : ""}`}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-1.5">
+          <Select value={symbol} onValueChange={setSymbol}>
+            <SelectTrigger className="h-9 border border-input rounded-md px-3 text-xs w-[118px] bg-background">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SYMBOLS.map((s) => (
+                <SelectItem key={s.id} value={s.id}>{s.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="flex overflow-hidden border border-border rounded-md bg-background">
+            <Button
+              variant={viewMode === "month" ? "secondary" : "ghost"}
+              size="sm"
+              className={cn("h-8 px-2.5 text-xs rounded-none border-0 shadow-none", viewMode === "month" && "bg-accent text-accent-foreground")}
               onClick={() => setViewMode("month")}
-            >月视图</button>
-            <button
-              className={`coverage-view-btn${viewMode === "year" ? " active" : ""}`}
+            >{t("viewModeMonth")}</Button>
+            <Button
+              variant={viewMode === "year" ? "secondary" : "ghost"}
+              size="sm"
+              className={cn("h-8 px-2.5 text-xs rounded-none border-0 shadow-none", viewMode === "year" && "bg-accent text-accent-foreground")}
               onClick={() => setViewMode("year")}
-            >年视图</button>
+            >{t("viewModeYear")}</Button>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button className="coverage-nav-btn" onClick={prevPeriod}>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="compactIcon" className="h-8 w-8" onClick={prevPeriod}>
             <ChevronLeft size={14} />
-          </button>
-          <span className="coverage-title">{title}</span>
-          <button className="coverage-nav-btn" onClick={nextPeriod}>
+          </Button>
+          <span className="min-w-[112px] text-foreground text-xs font-extrabold text-center">{title}</span>
+          <Button variant="outline" size="compactIcon" className="h-8 w-8" onClick={nextPeriod}>
             <ChevronRight size={14} />
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* Legend */}
-      <div className="coverage-legend">
+      <div className="flex items-center gap-2.5 flex-wrap">
         {[
-          { color: "rgba(255,255,255,0.04)", label: "无数据" },
-          { color: "rgba(217,75,85,0.6)",   label: "< 50%" },
-          { color: "rgba(226,177,60,0.55)",  label: "50–75%" },
-          { color: "rgba(49,185,120,0.45)",  label: "75–95%" },
-          { color: "rgba(49,185,120,0.85)",  label: "≥ 95%" },
+          { tone: "bg-muted/40 border-transparent", label: t("noDataEmpty") },
+          { tone: "bg-destructive/40 border-destructive/30 border", label: "< 50%" },
+          { tone: "bg-warning/45 border-warning/30 border", label: "50–75%" },
+          { tone: "bg-success/35 border-success/25 border", label: "75–95%" },
+          { tone: "bg-success/75 border-success/35 border", label: "≥ 95%" },
         ].map((item) => (
-          <span key={item.label} className="coverage-legend-item">
-            <span className="coverage-legend-dot" style={{ background: item.color }} />
+          <span key={item.label} className="flex items-center gap-1.5 text-muted-foreground text-[11px]">
+            <span className={cn("w-2.5 h-2.5 rounded-[2px]", item.tone)} />
             {item.label}
           </span>
         ))}
@@ -153,7 +151,7 @@ export function DataCoverageCalendar() {
 
       {/* Calendar Body */}
       {loading ? (
-        <div className="empty-state" style={{ minHeight: 160 }}>加载中...</div>
+        <div className="flex items-center justify-center min-h-[160px] text-muted-foreground text-xs">{t("loading")}</div>
       ) : viewMode === "month" ? (
         <MonthCalendar year={year} month={month} data={dailyData} />
       ) : (
@@ -168,7 +166,10 @@ export function DataCoverageCalendar() {
 function MonthCalendar({
   year, month, data
 }: { year: number; month: number; data: DayCoverage[] }) {
+  const { t } = useTranslation();
   const coverageMap = new Map(data.map((d) => [d.day, d]));
+
+  const dayLabels = React.useMemo(() => Array.from({ length: 7 }, (_, i) => t(`day_${i + 1}`)), [t]);
 
   // Build calendar grid (Mon-Sun)
   const firstDay = new Date(year, month - 1, 1);
@@ -187,39 +188,37 @@ function MonthCalendar({
   while (cells.length % 7 !== 0) cells.push({ day: null, dateStr: null });
 
   return (
-    <div className="month-calendar">
+    <div className="flex flex-col gap-1">
       {/* Day headers */}
-      <div className="month-calendar-header">
-        {DAY_LABELS.map((l) => (
-          <div key={l} className="month-day-label">{l}</div>
+      <div className="grid grid-cols-7 gap-0.75">
+        {dayLabels.map((l) => (
+          <div key={l} className="py-1 text-muted-foreground text-[11px] font-bold text-center">{l}</div>
         ))}
       </div>
       {/* Day cells */}
-      <div className="month-calendar-grid">
+      <div className="grid grid-cols-7 gap-0.75">
         {cells.map((cell, idx) => {
           if (!cell.dateStr || !cell.day) {
-            return <div key={idx} className="day-cell empty" />;
+            return <div key={idx} className="aspect-square min-h-[34px] bg-transparent border border-transparent" />;
           }
           const coverage = coverageMap.get(cell.dateStr);
           const pct = coverage?.coveragePct ?? 0;
           const dayOfWeek = (startOffset + cell.day - 1) % 7; // 0=Mon
           const isWeekend = dayOfWeek >= 5;
-          const bg = coverageColor(pct, isWeekend && !coverage);
-          const border = coverage ? coverageBorder(pct) : "transparent";
+          const tone = coverageTone(pct, isWeekend && !coverage);
 
           return (
             <div
               key={cell.dateStr}
-              className={`day-cell${isWeekend ? " weekend" : ""}`}
-              style={{ background: bg, borderColor: border }}
+              className={cn("aspect-square min-h-[34px] flex flex-col items-center justify-center gap-0.5 border border-transparent rounded-[5px] transition-colors", tone)}
               title={coverage
                 ? `${cell.dateStr}\n${coverage.minuteCount} 分钟 · ${pct}% 覆盖率`
-                : `${cell.dateStr}${isWeekend ? "（周末）" : "（无数据）"}`
+                : `${cell.dateStr}${isWeekend ? ` (${t("noDataWeekend")})` : ` (${t("noDataEmpty")})`}`
               }
             >
-              <span className="day-num">{cell.day}</span>
+              <span className={cn("text-xs font-bold leading-none", (isWeekend && !coverage) ? "text-muted-foreground" : "text-foreground")}>{cell.day}</span>
               {coverage && (
-                <span className="day-pct">{pct}%</span>
+                <span className="text-[9px] opacity-80 leading-none">{pct}%</span>
               )}
             </div>
           );
@@ -234,30 +233,28 @@ function MonthCalendar({
 function YearCalendar({
   year, data
 }: { year: number; data: MonthCoverage[] }) {
+  const { t } = useTranslation();
   const coverageMap = new Map(data.map((d) => [d.month, d]));
 
   return (
-    <div className="year-calendar">
+    <div className="grid grid-cols-4 gap-2">
       {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => {
         const key = `${year}-${String(m).padStart(2, "0")}`;
         const coverage = coverageMap.get(key);
         const pct = coverage?.coveragePct ?? 0;
+        const monthLabel = t(`month_${m}`);
 
         return (
           <div
             key={key}
-            className="year-month-cell"
-            style={{
-              background: coverageColor(pct),
-              borderColor: coverage ? coverageBorder(pct) : "transparent"
-            }}
+            className={cn("min-h-[76px] flex flex-col items-center justify-center gap-1 border border-transparent rounded-md p-2.5 transition-colors", coverageTone(pct))}
             title={coverage
-              ? `${year}年${MONTH_NAMES[m - 1]}\n${coverage.minuteCount.toLocaleString()} 分钟 · ${pct}%`
-              : `${year}年${MONTH_NAMES[m - 1]}（无数据）`
+              ? `${year}年${monthLabel}\n${coverage.minuteCount.toLocaleString()} 分钟 · ${pct}%`
+              : `${year}年${monthLabel} (${t("noDataEmpty")})`
             }
           >
-            <span className="year-month-name">{MONTH_NAMES[m - 1]}</span>
-            {coverage && <span className="year-month-pct">{pct}%</span>}
+            <span className="text-foreground text-sm font-extrabold">{monthLabel}</span>
+            {coverage && <span className="text-foreground/75 text-[11px] font-bold">{pct}%</span>}
           </div>
         );
       })}

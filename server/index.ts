@@ -2,6 +2,7 @@ import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
 import { existsSync } from "node:fs";
+import type { ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +14,7 @@ import {
   saveTick,
   cleanOldTicks,
   aggregateTicksToMinute,
+  getQuote,
   getRecentTicks,
   getAggregatedCandles,
   supplementHistoryPrice,
@@ -38,7 +40,9 @@ import { fetchNewsEvents } from "./providers/news.js";
 import {
   fetchOandaQuotes,
   fetchOandaCandles,
-  fetchOandaCandlesForDay
+  fetchOandaCandlesForDay,
+  startOandaPricingStream,
+  type OandaStreamPrice
 } from "./providers/oanda.js";
 import type { CandlePoint, DashboardPayload, NewsEvent, Quote } from "./types.js";
 
@@ -46,6 +50,14 @@ import type { CandlePoint, DashboardPayload, NewsEvent, Quote } from "./types.js
 
 let latest: DashboardPayload | null = null;
 let lastMinute = getCurrentMinuteISO();
+let oandaStreamStatus: { state: "connecting" | "connected" | "error" | "stopped"; detail: string } = {
+  state: "stopped",
+  detail: "OANDA pricing stream not started"
+};
+let pendingDashboardRefresh: ReturnType<typeof setTimeout> | null = null;
+let oandaStreamQueue = Promise.resolve();
+
+const DASHBOARD_NOTIFY_THROTTLE_MS = 1000;
 
 // ─── Sync Job ─────────────────────────────────────────────────────────────
 
@@ -62,6 +74,31 @@ interface SyncJob {
 }
 
 let currentSyncJob: SyncJob | null = null;
+
+type TaskStatus = "idle" | "running" | "done" | "error" | "stopped";
+
+interface TaskRuntimeState {
+  status: TaskStatus;
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+  lastSuccessAt: string | null;
+  lastErrorAt: string | null;
+  lastError: string | null;
+  nextRunAt?: string | null;
+}
+
+const realtimeTaskState: Record<string, TaskRuntimeState> = {
+  au9999: createTaskState("idle"),
+  oandaStream: createTaskState("stopped"),
+  dashboardStream: createTaskState("running")
+};
+
+const scheduledTaskState: Record<string, TaskRuntimeState> = {
+  fullRefresh: createTaskState("idle"),
+  minuteAggregation: createTaskState("idle")
+};
+
+let lastOandaStreamPriceAt: string | null = null;
 
 function isSyncRunning() {
   return currentSyncJob?.status === "running";
@@ -103,6 +140,13 @@ app.get("/api/settings", async () => {
     storage: { databasePath: config.databasePath }
   };
 });
+
+app.get("/api/tasks", async () => ({
+  updatedAt: new Date().toISOString(),
+  history: historyTaskStatus(),
+  realtime: realtimeTaskStatuses(),
+  scheduled: scheduledTaskStatuses()
+}));
 
 // ─── Candles ──────────────────────────────────────────────────────────────
 
@@ -179,9 +223,9 @@ function aggregateTicksIntoMap(
   }
 }
 
-// ─── SSE ──────────────────────────────────────────────────────────────────
+// ─── Dashboard Invalidation Stream ────────────────────────────────────────
 
-const sseClients = new Set<any>();
+const sseClients = new Set<ServerResponse>();
 
 app.get("/api/stream", (request, reply) => {
   reply.raw.setHeader("Content-Type", "text/event-stream");
@@ -190,22 +234,31 @@ app.get("/api/stream", (request, reply) => {
   reply.raw.setHeader("X-Accel-Buffering", "no");
   reply.raw.statusCode = 200;
   reply.raw.write("retry: 3000\n\n");
+  if (latest) {
+    reply.raw.write(`data: ${JSON.stringify({ type: "update", payload: { updatedAt: latest.updatedAt } })}\n\n`);
+  }
   sseClients.add(reply.raw);
   request.raw.on("close", () => sseClients.delete(reply.raw));
 });
 
-function broadcast(type: string, payload: unknown) {
-  const message = `data: ${JSON.stringify({ type, payload })}\n\n`;
+function broadcastUpdate() {
+  if (!latest) return;
+  const message = `data: ${JSON.stringify({ type: "update", payload: { updatedAt: latest.updatedAt } })}\n\n`;
+  realtimeTaskState.dashboardStream.status = "running";
+  realtimeTaskState.dashboardStream.lastSuccessAt = new Date().toISOString();
   for (const client of sseClients) {
     try { client.write(message); } catch { sseClients.delete(client); }
   }
 }
 
-function broadcastUpdate() {
-  if (!latest) return;
-  broadcast("update", {
-    updatedAt: latest.updatedAt
-  });
+function scheduleDashboardRefresh() {
+  if (pendingDashboardRefresh) return;
+  pendingDashboardRefresh = setTimeout(() => {
+    pendingDashboardRefresh = null;
+    buildDashboardSnapshot({ oandaDetail: oandaStreamStatus.detail })
+      .then(() => broadcastUpdate())
+      .catch((error) => app.log.error(error));
+  }, DASHBOARD_NOTIFY_THROTTLE_MS);
 }
 
 // ─── Not Found ────────────────────────────────────────────────────────────
@@ -343,7 +396,6 @@ app.post("/api/settings/data/sync-range", async (request, reply) => {
     if (currentSyncJob) {
       currentSyncJob.status = "error";
       currentSyncJob.error = err instanceof Error ? err.message : "Unknown error";
-      broadcast("sync-progress", currentSyncJob);
     }
   });
 });
@@ -353,7 +405,6 @@ async function runDateRangeSync(datasetId: string, days: string[]) {
 
   for (const day of days) {
     currentSyncJob.currentDay = day;
-    broadcast("sync-progress", { ...currentSyncJob });
 
     const rows: Array<{ symbol: string; price: number; time: string }> = [];
 
@@ -380,7 +431,6 @@ async function runDateRangeSync(datasetId: string, days: string[]) {
     if (rows.length) bulkSaveHistoryMinutes(rows);
 
     currentSyncJob.completedDays++;
-    broadcast("sync-progress", { ...currentSyncJob });
 
     // Small throttle to avoid hammering OANDA API
     await new Promise((r) => setTimeout(r, 150));
@@ -388,7 +438,6 @@ async function runDateRangeSync(datasetId: string, days: string[]) {
 
   currentSyncJob.status = "done";
   currentSyncJob.currentDay = null;
-  broadcast("sync-progress", { ...currentSyncJob });
 
   // Rebuild dashboard from the database after sync.
   latest = await buildDashboardSnapshot();
@@ -538,37 +587,46 @@ app.log.info(`Aurum Watch API listening on ${server}`);
 
 // Initial refresh
 await refreshLiveData();
+startOandaStreamWorker();
 
 // Per-second tick timer
 setInterval(() => {
-  tickRefresh().catch((err) => app.log.error(err));
+  runTrackedTask(realtimeTaskState.au9999, tickRefresh).catch((err) => app.log.error(err));
 }, 1000);
 
 // Full refresh every N seconds (quotes + news)
 setInterval(() => {
-  refreshLiveData().catch((err) => app.log.error(err));
+  scheduledTaskState.fullRefresh.nextRunAt = new Date(Date.now() + config.refreshIntervalMs).toISOString();
+  runTrackedTask(scheduledTaskState.fullRefresh, refreshLiveData).catch((err) => app.log.error(err));
 }, config.refreshIntervalMs);
 
 // ─── Refresh Logic ────────────────────────────────────────────────────────
 
 async function tickRefresh() {
-  const [oanda, au9999] = await Promise.all([fetchOandaQuotes(), fetchAu9999()]);
+  const au9999 = await fetchAu9999();
   const now = new Date().toISOString();
-  const quotes = derivedQuotes([...oanda.quotes, au9999]);
+  const baseQuotes = mergeBaseQuotes([au9999]);
+  const quotes = derivedQuotes(baseQuotes);
   saveQuotes(quotes);
 
   for (const q of quotes) {
-    if (q.value !== null && ["XAU_USD", "AU9999", "USD_CNH"].includes(q.symbol)) {
+    if (q.value !== null && q.symbol === "AU9999") {
       saveTick(q.symbol, q.value, now);
     }
   }
 
   const currentMinute = getCurrentMinuteISO();
   if (currentMinute !== lastMinute) {
+    scheduledTaskState.minuteAggregation.status = "running";
+    scheduledTaskState.minuteAggregation.lastStartedAt = new Date().toISOString();
     aggregateTicksToMinute(lastMinute);
     const oneHourAgo = new Date(Date.now() - 3600_000).toISOString();
     cleanOldTicks(oneHourAgo);
     lastMinute = currentMinute;
+    scheduledTaskState.minuteAggregation.status = "done";
+    scheduledTaskState.minuteAggregation.lastFinishedAt = new Date().toISOString();
+    scheduledTaskState.minuteAggregation.lastSuccessAt = scheduledTaskState.minuteAggregation.lastFinishedAt;
+    scheduledTaskState.minuteAggregation.nextRunAt = new Date(Date.now() + 60_000).toISOString();
   }
 
   latest = await buildDashboardSnapshot();
@@ -594,6 +652,216 @@ async function refreshLiveData() {
   });
   broadcastUpdate();
   return latest;
+}
+
+function startOandaStreamWorker() {
+  if (!config.oandaToken) return;
+
+  const controller = new AbortController();
+  const shutdown = () => controller.abort();
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+
+  startOandaPricingStream({
+    signal: controller.signal,
+    onStatus: (status) => {
+      oandaStreamStatus = status;
+      realtimeTaskState.oandaStream.status =
+        status.state === "connected" || status.state === "connecting"
+          ? "running"
+          : status.state === "error"
+            ? "error"
+            : "stopped";
+      if (status.state === "connecting") realtimeTaskState.oandaStream.lastStartedAt = new Date().toISOString();
+      if (status.state === "connected") realtimeTaskState.oandaStream.lastSuccessAt = new Date().toISOString();
+      if (status.state === "stopped") {
+        realtimeTaskState.oandaStream.lastFinishedAt = new Date().toISOString();
+        realtimeTaskState.oandaStream.lastError = null;
+      }
+      if (status.state === "error") {
+        realtimeTaskState.oandaStream.lastErrorAt = new Date().toISOString();
+        realtimeTaskState.oandaStream.lastError = status.detail;
+      }
+      if (status.state === "error") {
+        app.log.warn(status.detail);
+      } else {
+        app.log.info(status.detail);
+      }
+    },
+    onPrices: (prices) => {
+      oandaStreamQueue = oandaStreamQueue
+        .then(() => handleOandaStreamPrices(prices))
+        .catch((error) => app.log.error(error));
+    }
+  }).catch((error) => app.log.error(error));
+}
+
+async function handleOandaStreamPrices(prices: OandaStreamPrice[]) {
+  if (!prices.length) return;
+
+  const updatedQuotes = new Map<Quote["symbol"], Quote>();
+  for (const price of prices) {
+    saveTick(price.instrument, price.price, price.time);
+    updatedQuotes.set(price.instrument, quoteFromStreamPrice(price));
+    lastOandaStreamPriceAt = price.time;
+  }
+
+  saveQuotes(derivedQuotes(mergeBaseQuotes(Array.from(updatedQuotes.values()))));
+  realtimeTaskState.oandaStream.lastSuccessAt = lastOandaStreamPriceAt ?? new Date().toISOString();
+  scheduleDashboardRefresh();
+}
+
+function quoteFromStreamPrice(price: OandaStreamPrice): Quote {
+  const previous = getQuote(price.instrument);
+  const baseline = previous && previous.value !== null && previous.change !== null
+    ? previous.value - previous.change
+    : previous?.value ?? null;
+  const change = baseline !== null ? price.price - baseline : null;
+  const sparkline = [...(previous?.sparkline ?? []), price.price].slice(-120);
+
+  return {
+    symbol: price.instrument,
+    label: price.instrument === "XAU_USD" ? "XAU/USD" : "USD/CNH",
+    value: price.price,
+    change,
+    changePct: change !== null && baseline ? (change / baseline) * 100 : null,
+    unit: price.instrument === "XAU_USD" ? "USD/oz" : "rate",
+    source: "OANDA stream",
+    status: "ok",
+    updatedAt: price.time,
+    sparkline
+  };
+}
+
+function mergeBaseQuotes(updatedQuotes: Quote[]) {
+  const bySymbol = new Map<Quote["symbol"], Quote>();
+  const baseSymbols = new Set<Quote["symbol"]>(["XAU_USD", "USD_CNH", "AU9999"]);
+
+  for (const quote of getAllQuotesFromDb()) {
+    if (baseSymbols.has(quote.symbol)) bySymbol.set(quote.symbol, quote);
+  }
+  for (const quote of updatedQuotes) {
+    if (baseSymbols.has(quote.symbol)) bySymbol.set(quote.symbol, quote);
+  }
+
+  return Array.from(bySymbol.values());
+}
+
+function createTaskState(status: TaskStatus): TaskRuntimeState {
+  return {
+    status,
+    lastStartedAt: null,
+    lastFinishedAt: null,
+    lastSuccessAt: null,
+    lastErrorAt: null,
+    lastError: null,
+    nextRunAt: null
+  };
+}
+
+async function runTrackedTask<T>(state: TaskRuntimeState, task: () => Promise<T>): Promise<T> {
+  state.status = "running";
+  state.lastStartedAt = new Date().toISOString();
+  try {
+    const result = await task();
+    state.status = "done";
+    state.lastFinishedAt = new Date().toISOString();
+    state.lastSuccessAt = state.lastFinishedAt;
+    state.lastError = null;
+    return result;
+  } catch (error) {
+    state.status = "error";
+    state.lastFinishedAt = new Date().toISOString();
+    state.lastErrorAt = state.lastFinishedAt;
+    state.lastError = error instanceof Error ? error.message : "Unknown error";
+    throw error;
+  }
+}
+
+function historyTaskStatus() {
+  const job = currentSyncJob ?? {
+    status: "idle",
+    datasetId: null,
+    startDate: null,
+    endDate: null,
+    totalDays: 0,
+    completedDays: 0,
+    currentDay: null,
+    error: null,
+    startedAt: null
+  };
+  return {
+    id: "history-sync",
+    kind: "history_sync",
+    name: "历史数据同步",
+    description: "首次初始化和数据页手动区间同步共用此任务通道。",
+    ...job
+  };
+}
+
+function realtimeTaskStatuses() {
+  return [
+    {
+      id: "oanda-stream",
+      kind: "realtime_worker",
+      name: "OANDA 实时行情流",
+      status: realtimeTaskState.oandaStream.status,
+      detail: realtimeTaskState.oandaStream.status === "stopped"
+        ? `${oandaStreamStatus.detail}；看板仍会读取数据库快照，行情可能来自计划刷新。`
+        : oandaStreamStatus.detail,
+      lastSuccessAt: lastOandaStreamPriceAt ?? realtimeTaskState.oandaStream.lastSuccessAt,
+      lastError: realtimeTaskState.oandaStream.lastError
+    },
+    {
+      id: "au9999-refresh",
+      kind: "realtime_worker",
+      name: "AU9999 实时报价刷新",
+      status: realtimeWorkerStatus(realtimeTaskState.au9999),
+      detail: "每秒刷新并写入 ticks，供分钟聚合使用。",
+      lastSuccessAt: realtimeTaskState.au9999.lastSuccessAt,
+      lastError: realtimeTaskState.au9999.lastError
+    },
+    {
+      id: "dashboard-stream",
+      kind: "realtime_worker",
+      name: "浏览器快照通知流",
+      status: realtimeTaskState.dashboardStream.status,
+      detail: `${sseClients.size} 个浏览器连接正在监听更新通知。`,
+      lastSuccessAt: realtimeTaskState.dashboardStream.lastSuccessAt,
+      lastError: realtimeTaskState.dashboardStream.lastError
+    }
+  ];
+}
+
+function realtimeWorkerStatus(state: TaskRuntimeState): TaskStatus {
+  if (state.status === "error" || state.status === "stopped") return state.status;
+  if (!state.lastSuccessAt) return state.status === "running" ? "running" : "idle";
+  return Date.now() - new Date(state.lastSuccessAt).getTime() < 10_000 ? "running" : "stopped";
+}
+
+function scheduledTaskStatuses() {
+  return [
+    {
+      id: "full-refresh",
+      kind: "scheduled_sync",
+      name: "行情与新闻全量刷新",
+      status: scheduledTaskState.fullRefresh.status,
+      intervalMs: config.refreshIntervalMs,
+      nextRunAt: scheduledTaskState.fullRefresh.nextRunAt,
+      lastSuccessAt: scheduledTaskState.fullRefresh.lastSuccessAt,
+      lastError: scheduledTaskState.fullRefresh.lastError
+    },
+    {
+      id: "minute-aggregation",
+      kind: "scheduled_sync",
+      name: "秒级 ticks 聚合为分钟线",
+      status: scheduledTaskState.minuteAggregation.status,
+      intervalMs: 60_000,
+      nextRunAt: scheduledTaskState.minuteAggregation.nextRunAt,
+      lastSuccessAt: scheduledTaskState.minuteAggregation.lastSuccessAt,
+      lastError: scheduledTaskState.minuteAggregation.lastError
+    }
+  ];
 }
 
 async function buildDashboardSnapshot(options?: { oandaDetail?: string; newsDetail?: string; newsStatus?: Quote["status"] }) {
