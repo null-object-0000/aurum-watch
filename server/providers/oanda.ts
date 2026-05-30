@@ -1,3 +1,6 @@
+import http from "node:http";
+import https from "node:https";
+import { URL } from "node:url";
 import { config, oandaBaseUrl, oandaStreamUrl } from "../config.js";
 import type { CandlePoint, Health, Quote } from "../types.js";
 import { getQuote } from "../db.js";
@@ -30,20 +33,204 @@ const headers = () => ({
   "Content-Type": "application/json"
 });
 
-async function fetchWithTimeout(url: string | URL, init?: RequestInit, timeoutMs = 30000): Promise<Response> {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-  if (init?.signal) {
-    init.signal.addEventListener("abort", () => controller.abort());
-  }
-  try {
-    return await fetch(url, {
-      ...init,
-      signal: controller.signal
-    });
-  } finally {
-    clearTimeout(id);
-  }
+async function requestOanda(
+  urlStr: string,
+  options: {
+    method?: string;
+    headers?: Record<string, string>;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } = {}
+): Promise<{
+  ok: boolean;
+  status: number;
+  headers: Record<string, string>;
+  json: () => Promise<any>;
+  text: () => Promise<string>;
+  body: any;
+}> {
+  const url = new URL(urlStr);
+  const method = options.method ?? "GET";
+  const timeoutMs = options.timeoutMs ?? 30000;
+  const signal = options.signal;
+
+  const proxyUrlStr =
+    process.env.HTTPS_PROXY ||
+    process.env.HTTP_PROXY ||
+    process.env.https_proxy ||
+    process.env.http_proxy;
+
+  return new Promise((resolve, reject) => {
+    let resolvedOrRejected = false;
+    let activeReq: any = null;
+    let timeoutId: any = null;
+
+    const cleanup = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    };
+
+    const safeResolve = (val: any) => {
+      if (resolvedOrRejected) return;
+      resolvedOrRejected = true;
+      cleanup();
+      resolve(val);
+    };
+
+    const safeReject = (err: Error) => {
+      if (resolvedOrRejected) return;
+      resolvedOrRejected = true;
+      cleanup();
+      if (activeReq) {
+        try {
+          activeReq.destroy();
+        } catch (_) {}
+      }
+      reject(err);
+    };
+
+    if (timeoutMs > 0 && timeoutMs !== Infinity) {
+      timeoutId = setTimeout(() => {
+        safeReject(new Error(`OANDA request timeout (${timeoutMs}ms) to ${urlStr}`));
+      }, timeoutMs);
+    }
+
+    const onAbort = () => {
+      safeReject(new Error("OANDA request aborted"));
+    };
+
+    if (signal) {
+      if (signal.aborted) {
+        return onAbort();
+      }
+      signal.addEventListener("abort", onAbort);
+    }
+
+    const headers = {
+      ...options.headers,
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    };
+
+    const handleResponse = (res: any) => {
+      const ok = res.statusCode >= 200 && res.statusCode < 300;
+      
+      const resHeaders: Record<string, string> = {};
+      for (const [key, value] of Object.entries(res.headers)) {
+        if (value !== undefined) {
+          resHeaders[key.toLowerCase()] = Array.isArray(value) ? value.join(", ") : String(value);
+        }
+      }
+
+      safeResolve({
+        ok,
+        status: res.statusCode || 0,
+        headers: resHeaders,
+        body: res,
+        text: () => {
+          return new Promise((resText, rejText) => {
+            let data = "";
+            res.on("data", (chunk: any) => (data += chunk));
+            res.on("end", () => resText(data));
+            res.on("error", (err: any) => rejText(err));
+          });
+        },
+        json: async () => {
+          const text = await new Promise<string>((resText, rejText) => {
+            let data = "";
+            res.on("data", (chunk: any) => (data += chunk));
+            res.on("end", () => resText(data));
+            res.on("error", (err: any) => rejText(err));
+          });
+          return JSON.parse(text);
+        },
+      });
+    };
+
+    if (proxyUrlStr) {
+      const proxy = new URL(proxyUrlStr);
+
+      if (url.protocol === "https:") {
+        const connectReq = http.request({
+          host: proxy.hostname,
+          port: proxy.port || 80,
+          method: "CONNECT",
+          path: `${url.hostname}:443`,
+          headers: {
+            Host: `${url.hostname}:443`,
+          },
+        });
+        activeReq = connectReq;
+
+        connectReq.on("connect", (res, socket) => {
+          if (res.statusCode === 200) {
+            const agent = new https.Agent({ keepAlive: true });
+            (agent as any).createConnection = () => socket;
+            
+            const req = https.request(
+              urlStr,
+              {
+                method,
+                headers,
+                agent,
+              },
+              handleResponse
+            );
+            activeReq = req;
+            req.on("error", safeReject);
+            req.end();
+          } else {
+            safeReject(new Error(`Proxy CONNECT failed: ${res.statusCode}`));
+          }
+        });
+
+        connectReq.on("error", safeReject);
+        connectReq.end();
+      } else {
+        const req = http.request(
+          {
+            host: proxy.hostname,
+            port: proxy.port || 80,
+            path: urlStr,
+            method,
+            headers,
+          },
+          handleResponse
+        );
+        activeReq = req;
+        req.on("error", safeReject);
+        req.end();
+      }
+    } else {
+      const reqFn = url.protocol === "https:" ? https.request : http.request;
+      const req = reqFn(
+        urlStr,
+        {
+          method,
+          headers,
+        },
+        handleResponse
+      );
+      activeReq = req;
+      req.on("error", safeReject);
+      req.end();
+    }
+  });
+}
+
+async function fetchWithTimeout(
+  urlStr: string | URL,
+  init?: { headers?: Record<string, string>; signal?: AbortSignal },
+  timeoutMs = 30000
+): Promise<any> {
+  const url = typeof urlStr === "string" ? urlStr : urlStr.toString();
+  return requestOanda(url, {
+    method: "GET",
+    headers: init?.headers,
+    timeoutMs,
+    signal: init?.signal
+  });
 }
 
 function unavailable(symbol: Quote["symbol"], label: string, unit: string, reason: string): Quote {
@@ -163,7 +350,11 @@ export async function startOandaPricingStream({
     onStatus?.({ state: "connecting", detail: "Connecting to OANDA pricing stream" });
     const accountId = await getAccountId();
     const url = `${oandaStreamUrl}/v3/accounts/${accountId}/pricing/stream?instruments=XAU_USD,USD_CNH`;
-    const response = await fetch(url, { headers: headers(), signal });
+    const response = await requestOanda(url, {
+      headers: headers(),
+      timeoutMs: 0, // No timeout for stream
+      signal
+    });
     if (!response.ok || !response.body) {
       throw new Error(`OANDA pricing stream ${response.status}`);
     }
@@ -172,7 +363,11 @@ export async function startOandaPricingStream({
     await readPricingStream(response.body, onPrices, signal);
   } catch (error) {
     if (!signal?.aborted) {
-      const detail = error instanceof Error ? error.message : "OANDA pricing stream failed";
+      let detail = error instanceof Error ? error.message : "OANDA pricing stream failed";
+      if (error instanceof Error && error.cause) {
+        const causeMsg = error.cause instanceof Error ? error.cause.message : String(error.cause);
+        detail += ` (cause: ${causeMsg})`;
+      }
       if (detail.toLowerCase() === "terminated") {
         onStatus?.({ state: "stopped", detail: "OANDA pricing stream terminated" });
         return;
@@ -186,24 +381,53 @@ export async function startOandaPricingStream({
 }
 
 async function readPricingStream(
-  body: ReadableStream<Uint8Array>,
+  body: any,
   onPrices: (prices: OandaStreamPrice[]) => void | Promise<void>,
   signal?: AbortSignal
 ) {
-  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (!signal?.aborted) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  const processChunk = async (chunk: Uint8Array | string) => {
+    const text = typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+    buffer += text;
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
 
     for (const line of lines) {
       const prices = parseStreamLine(line);
       if (prices.length) await onPrices(prices);
+    }
+  };
+
+  if (typeof body.getReader === "function") {
+    const reader = body.getReader();
+    try {
+      while (!signal?.aborted) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) await processChunk(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  } else {
+    const onAbort = () => {
+      body.destroy?.();
+    };
+    if (signal) {
+      signal.addEventListener("abort", onAbort);
+    }
+    try {
+      for await (const chunk of body) {
+        if (signal?.aborted) break;
+        await processChunk(chunk);
+      }
+    } finally {
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      body.destroy?.();
     }
   }
 }
