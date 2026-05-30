@@ -1,6 +1,7 @@
 import http from "node:http";
 import https from "node:https";
 import { URL } from "node:url";
+import net from "node:net";
 import { config, oandaBaseUrl, oandaStreamUrl } from "../config.js";
 import type { CandlePoint, Health, Quote } from "../types.js";
 import { getQuote } from "../db.js";
@@ -32,6 +33,62 @@ const headers = () => ({
   Authorization: `Bearer ${config.oandaToken}`,
   "Content-Type": "application/json"
 });
+
+function createSocks5Connection(
+  proxyHost: string,
+  proxyPort: number,
+  targetHost: string,
+  targetPort: number,
+  callback: (err: Error | null, socket?: net.Socket) => void
+) {
+  let callbackCalled = false;
+  const safeCallback = (err: Error | null, resSocket?: net.Socket) => {
+    if (callbackCalled) return;
+    callbackCalled = true;
+    callback(err, resSocket);
+  };
+
+  const socket = net.connect(proxyPort, proxyHost);
+
+  socket.on("error", (err) => {
+    safeCallback(err);
+  });
+
+  socket.once("close", () => {
+    safeCallback(new Error("Connection to SOCKS proxy closed"));
+  });
+
+  socket.once("connect", () => {
+    socket.write(Buffer.from([0x05, 0x01, 0x00]));
+
+    socket.once("data", (data) => {
+      if (data[0] !== 0x05 || data[1] !== 0x00) {
+        socket.destroy();
+        safeCallback(new Error("SOCKS5 negotiation failed"));
+        return;
+      }
+
+      const hostBuffer = Buffer.from(targetHost, "utf8");
+      const reqHeader = Buffer.from([0x05, 0x01, 0x00, 0x03, hostBuffer.length]);
+      const portBuffer = Buffer.alloc(2);
+      portBuffer.writeUInt16BE(targetPort, 0);
+
+      socket.write(Buffer.concat([reqHeader, hostBuffer, portBuffer]));
+
+      socket.once("data", (data) => {
+        if (data[0] !== 0x05 || data[1] !== 0x00) {
+          socket.destroy();
+          safeCallback(new Error(`SOCKS5 CONNECT failed with code ${data[1]}`));
+          return;
+        }
+
+        socket.removeAllListeners("error");
+        socket.removeAllListeners("close");
+        safeCallback(null, socket);
+      });
+    });
+  });
+}
 
 async function requestOanda(
   urlStr: string,
@@ -150,57 +207,89 @@ async function requestOanda(
 
     if (proxyUrlStr) {
       const proxy = new URL(proxyUrlStr);
+      const isSocks = proxy.protocol.startsWith("socks");
 
-      if (url.protocol === "https:") {
-        const connectReq = http.request({
-          host: proxy.hostname,
-          port: proxy.port || 80,
-          method: "CONNECT",
-          path: `${url.hostname}:443`,
-          headers: {
-            Host: `${url.hostname}:443`,
-          },
-        });
-        activeReq = connectReq;
+      if (isSocks) {
+        const proxyHost = proxy.hostname;
+        const proxyPort = Number(proxy.port || 1080);
+        const targetHost = url.hostname;
+        const targetPort = Number(url.port || (url.protocol === "https:" ? 443 : 80));
 
-        connectReq.on("connect", (res, socket) => {
-          if (res.statusCode === 200) {
-            const agent = new https.Agent({ keepAlive: true });
-            (agent as any).createConnection = () => socket;
-            
-            const req = https.request(
-              urlStr,
-              {
-                method,
-                headers,
-                agent,
-              },
-              handleResponse
-            );
-            activeReq = req;
-            req.on("error", safeReject);
-            req.end();
-          } else {
-            safeReject(new Error(`Proxy CONNECT failed: ${res.statusCode}`));
-          }
-        });
+        const agentOptions = { keepAlive: true };
+        const agent = url.protocol === "https:"
+          ? new https.Agent(agentOptions)
+          : new http.Agent(agentOptions);
 
-        connectReq.on("error", safeReject);
-        connectReq.end();
-      } else {
-        const req = http.request(
+        (agent as any).createConnection = (opts: any, cb: any) => {
+          createSocks5Connection(proxyHost, proxyPort, targetHost, targetPort, cb);
+        };
+
+        const reqFn = url.protocol === "https:" ? https.request : http.request;
+        const req = reqFn(
+          urlStr,
           {
-            host: proxy.hostname,
-            port: proxy.port || 80,
-            path: urlStr,
             method,
             headers,
+            agent,
           },
           handleResponse
         );
         activeReq = req;
         req.on("error", safeReject);
         req.end();
+      } else {
+        if (url.protocol === "https:") {
+          const proxyReqFn = proxy.protocol === "https:" ? https.request : http.request;
+          const connectReq = proxyReqFn({
+            host: proxy.hostname,
+            port: proxy.port || (proxy.protocol === "https:" ? 443 : 80),
+            method: "CONNECT",
+            path: `${url.hostname}:443`,
+            headers: {
+              Host: `${url.hostname}:443`,
+            },
+          });
+          activeReq = connectReq;
+
+          connectReq.on("connect", (res, socket) => {
+            if (res.statusCode === 200) {
+              const agent = new https.Agent({ keepAlive: true });
+              (agent as any).createConnection = () => socket;
+              
+              const req = https.request(
+                urlStr,
+                {
+                  method,
+                  headers,
+                  agent,
+                },
+                handleResponse
+              );
+              activeReq = req;
+              req.on("error", safeReject);
+              req.end();
+            } else {
+              safeReject(new Error(`Proxy CONNECT failed: ${res.statusCode}`));
+            }
+          });
+
+          connectReq.on("error", safeReject);
+          connectReq.end();
+        } else {
+          const req = http.request(
+            {
+              host: proxy.hostname,
+              port: proxy.port || 80,
+              path: urlStr,
+              method,
+              headers,
+            },
+            handleResponse
+          );
+          activeReq = req;
+          req.on("error", safeReject);
+          req.end();
+        }
       }
     } else {
       const reqFn = url.protocol === "https:" ? https.request : http.request;

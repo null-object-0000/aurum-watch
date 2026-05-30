@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import { URL } from "node:url";
+import net from "node:net";
 import { config } from "../config.js";
 import type { Direction, NewsEvent } from "../types.js";
 import { analyzeNewsItems, isLlmConfigured } from "./llm.js";
@@ -37,6 +38,62 @@ const NEWS_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const NEWS_FAILURE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cool-off on failure
 
 // ─── Fetch ────────────────────────────────────────────────────────────────
+
+function createSocks5Connection(
+  proxyHost: string,
+  proxyPort: number,
+  targetHost: string,
+  targetPort: number,
+  callback: (err: Error | null, socket?: net.Socket) => void
+) {
+  let callbackCalled = false;
+  const safeCallback = (err: Error | null, resSocket?: net.Socket) => {
+    if (callbackCalled) return;
+    callbackCalled = true;
+    callback(err, resSocket);
+  };
+
+  const socket = net.connect(proxyPort, proxyHost);
+
+  socket.on("error", (err) => {
+    safeCallback(err);
+  });
+
+  socket.once("close", () => {
+    safeCallback(new Error("Connection to SOCKS proxy closed"));
+  });
+
+  socket.once("connect", () => {
+    socket.write(Buffer.from([0x05, 0x01, 0x00]));
+
+    socket.once("data", (data) => {
+      if (data[0] !== 0x05 || data[1] !== 0x00) {
+        socket.destroy();
+        safeCallback(new Error("SOCKS5 negotiation failed"));
+        return;
+      }
+
+      const hostBuffer = Buffer.from(targetHost, "utf8");
+      const reqHeader = Buffer.from([0x05, 0x01, 0x00, 0x03, hostBuffer.length]);
+      const portBuffer = Buffer.alloc(2);
+      portBuffer.writeUInt16BE(targetPort, 0);
+
+      socket.write(Buffer.concat([reqHeader, hostBuffer, portBuffer]));
+
+      socket.once("data", (data) => {
+        if (data[0] !== 0x05 || data[1] !== 0x00) {
+          socket.destroy();
+          safeCallback(new Error(`SOCKS5 CONNECT failed with code ${data[1]}`));
+          return;
+        }
+
+        socket.removeAllListeners("error");
+        socket.removeAllListeners("close");
+        safeCallback(null, socket);
+      });
+    });
+  });
+}
 
 function fetchWithProxy(urlStr: string, timeoutMs = 30000): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -76,50 +133,25 @@ function fetchWithProxy(urlStr: string, timeoutMs = 30000): Promise<string> {
 
     if (proxyUrl) {
       const proxy = new URL(proxyUrl);
-      
-      if (url.protocol === "https:") {
-        const connectReq = http.request({
-          host: proxy.hostname,
-          port: proxy.port || 80,
-          method: "CONNECT",
-          path: `${url.hostname}:443`,
-          headers: {
-            Host: `${url.hostname}:443`
-          }
-        });
-        activeReq = connectReq;
+      const isSocks = proxy.protocol.startsWith("socks");
 
-        connectReq.on("connect", (res, socket) => {
-          if (res.statusCode === 200) {
-            const agent = new https.Agent({ keepAlive: true });
-            (agent as any).createConnection = () => socket;
-            const req = https.get(urlStr, { headers, agent }, (response) => {
-              let data = "";
-              response.on("data", (chunk) => data += chunk);
-              response.on("end", () => {
-                if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) {
-                  safeResolve(data);
-                } else {
-                  safeReject(new Error(`NewsNow API HTTP ${response.statusCode}`));
-                }
-              });
-            });
-            activeReq = req;
-            req.on("error", safeReject);
-          } else {
-            safeReject(new Error(`Proxy CONNECT failed: ${res.statusCode}`));
-          }
-        });
+      if (isSocks) {
+        const proxyHost = proxy.hostname;
+        const proxyPort = Number(proxy.port || 1080);
+        const targetHost = url.hostname;
+        const targetPort = Number(url.port || (url.protocol === "https:" ? 443 : 80));
 
-        connectReq.on("error", safeReject);
-        connectReq.end();
-      } else {
-        const req = http.get({
-          host: proxy.hostname,
-          port: proxy.port || 80,
-          path: urlStr,
-          headers
-        }, (response) => {
+        const agentOptions = { keepAlive: true };
+        const agent = url.protocol === "https:"
+          ? new https.Agent(agentOptions)
+          : new http.Agent(agentOptions);
+
+        (agent as any).createConnection = (opts: any, cb: any) => {
+          createSocks5Connection(proxyHost, proxyPort, targetHost, targetPort, cb);
+        };
+
+        const getFn = url.protocol === "https:" ? https.get : http.get;
+        const req = getFn(urlStr, { headers, agent }, (response) => {
           let data = "";
           response.on("data", (chunk) => data += chunk);
           response.on("end", () => {
@@ -132,6 +164,64 @@ function fetchWithProxy(urlStr: string, timeoutMs = 30000): Promise<string> {
         });
         activeReq = req;
         req.on("error", safeReject);
+      } else {
+        if (url.protocol === "https:") {
+          const proxyReqFn = proxy.protocol === "https:" ? https.request : http.request;
+          const connectReq = proxyReqFn({
+            host: proxy.hostname,
+            port: proxy.port || (proxy.protocol === "https:" ? 443 : 80),
+            method: "CONNECT",
+            path: `${url.hostname}:443`,
+            headers: {
+              Host: `${url.hostname}:443`
+            }
+          });
+          activeReq = connectReq;
+
+          connectReq.on("connect", (res, socket) => {
+            if (res.statusCode === 200) {
+              const agent = new https.Agent({ keepAlive: true });
+              (agent as any).createConnection = () => socket;
+              const req = https.get(urlStr, { headers, agent }, (response) => {
+                let data = "";
+                response.on("data", (chunk) => data += chunk);
+                response.on("end", () => {
+                  if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) {
+                    safeResolve(data);
+                  } else {
+                    safeReject(new Error(`NewsNow API HTTP ${response.statusCode}`));
+                  }
+                });
+              });
+              activeReq = req;
+              req.on("error", safeReject);
+            } else {
+              safeReject(new Error(`Proxy CONNECT failed: ${res.statusCode}`));
+            }
+          });
+
+          connectReq.on("error", safeReject);
+          connectReq.end();
+        } else {
+          const req = http.get({
+            host: proxy.hostname,
+            port: proxy.port || 80,
+            path: urlStr,
+            headers
+          }, (response) => {
+            let data = "";
+            response.on("data", (chunk) => data += chunk);
+            response.on("end", () => {
+              if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) {
+                safeResolve(data);
+              } else {
+                safeReject(new Error(`NewsNow API HTTP ${response.statusCode}`));
+              }
+            });
+          });
+          activeReq = req;
+          req.on("error", safeReject);
+        }
       }
     } else {
       const getFn = url.protocol === "https:" ? https.get : http.get;
